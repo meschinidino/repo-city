@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- Repo City sprite-pipeline prototype. Serve the repo root over HTTP (canvas pixel reads need same-origin images):
+     python3 -m http.server 8000   then open http://localhost:8000/prototype/sprite-spike/ -->
+<title>Archipelago Sprite Spike</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Overpass:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: checks first (numbers), then the scene with a full-size inspection mode, then the rules, then the cut-out evidence. */
+:root{
+  --bg:#EDF1F0; --panel:#FFFFFF; --fg:#1B2321; --muted:#5B6662; --rule:#D5DBD8; --accent:#1F6F78;
+  --good:#2E7D4F; --warn:#A8640F; --bad:#B3261E; --sea:#3E8FA0;
+  --display:"Bricolage Grotesque","Avenir Next",sans-serif;
+  --body:"Overpass","Avenir Next","Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#101615; --panel:#18201E; --fg:#E2E8E5; --muted:#97A39E; --rule:#29332F; --accent:#6CC3CC;
+  --good:#5FBF85; --warn:#E0AA4C; --bad:#F08178; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#101615; --panel:#18201E; --fg:#E2E8E5; --muted:#97A39E; --rule:#29332F; --accent:#6CC3CC;
+  --good:#5FBF85; --warn:#E0AA4C; --bad:#F08178; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:16px;line-height:1.5;margin:0;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 64px}
+.wrap{max-width:1400px;margin:0 auto}
+h1,h2,h3{font-family:var(--display);font-weight:800;margin:0;text-wrap:balance}
+h1{font-size:clamp(2rem,4.5vw,3.1rem);letter-spacing:-.02em;line-height:1}
+h2{font-size:clamp(1.3rem,2.4vw,1.7rem)}
+h3{font-size:1.05rem}
+p{margin:0}
+.muted{color:var(--muted)}
+.kick{font-family:var(--mono);font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);font-weight:600}
+header{padding-block:44px 16px;display:grid;gap:12px;max-width:80ch}
+section{padding-block:36px 0;display:grid;gap:14px}
+.checks{width:100%;border-collapse:collapse;font-size:.92rem}
+.checks th,.checks td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+.checks th{font-size:.78rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.checks td.v{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{display:inline-block;font:600 .74rem var(--mono);padding:2px 8px;border-radius:99px;color:#fff}
+.pill.pass{background:var(--good)} .pill.warn{background:var(--warn)} .pill.fail{background:var(--bad)} .pill.info{background:var(--muted)}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--rule);border-radius:6px}
+.controls{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;padding-block:10px;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.seg{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.seg span{font-size:.85rem;color:var(--muted);margin-right:4px}
+.seg button{font:600 .85rem var(--body);padding:6px 12px 5px;border-radius:4px;border:1px solid var(--rule);background:var(--panel);color:var(--fg);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.stage{border-radius:8px;overflow:auto;background:var(--sea);max-height:82vh}
+.stage canvas{display:block}
+.cap{font-size:.85rem;color:var(--muted)}
+ul.plain{margin:0;padding-left:1.1em;display:grid;gap:6px;max-width:80ch}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:8px}
+.cell{display:grid;gap:4px;font-size:.78rem;min-width:0}
+.cell canvas{width:100%;aspect-ratio:1;display:block;border-radius:4px;
+  background-color:#fff;background-image:linear-gradient(45deg,#e6e6e6 25%,transparent 25%),linear-gradient(-45deg,#e6e6e6 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e6e6e6 75%),linear-gradient(-45deg,transparent 75%,#e6e6e6 75%);
+  background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}
+.cell .m{font-family:var(--mono);color:var(--muted);font-size:.7rem}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="kick">Repo City · sprite spike · round 3 · precision pass</p>
+  <h1>Pieces placed by measurement, not by eye</h1>
+  <p class="muted">Round 2 looked right from far away and broke up close: buildings off their tiles, tiles overlapping, buildings covering each other, sprites cropped, bridges misaligned. This round replaces every guess with a measurement or a rule, and the page checks itself. The numbers below are computed live from the sprites and the layout every time the page loads.</p>
+</header>
+
+<section>
+  <h2>Checks</h2>
+  <div class="tablewrap"><table class="checks"><thead><tr><th>Check</th><th>Result</th><th>Value</th><th>How it's measured</th></tr></thead><tbody id="checks"><tr><td colspan="4">Running…</td></tr></tbody></table></div>
+</section>
+
+<section>
+  <h2>The scene</h2>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="View"><span>View</span><button data-k="view" data-v="fit" aria-pressed="true">Whole map</button><button data-k="view" data-v="full" aria-pressed="false">Full size (scroll)</button></div>
+    <div class="seg" role="group" aria-label="Overlay"><span>Overlay</span><button data-k="ov" data-v="off" aria-pressed="true">Off</button><button data-k="ov" data-v="grid" aria-pressed="false">Grid and footprints</button></div>
+  </div>
+  <div class="stage" id="stage"><canvas id="scene" aria-label="Archipelago assembled from measured sprites"></canvas></div>
+  <p class="cap" id="cap">Loading…</p>
+</section>
+
+<section>
+  <h2>The rules</h2>
+  <ul class="plain">
+    <li><b>Tiles are exact.</b> Each generated tile's top face is measured (top, left and right corners), warped onto the exact grid diamond, and clipped to one shared tile shape. Neighboring tiles can't overlap or leave gaps.</li>
+    <li><b>Every building stands on a footprint plate.</b> Buildings were generated on a flat cyan plate the size of their footprint (1×1, 2×1 or 2×2 tiles). The plate's corners set the building's scale and position, then the plate is keyed out. Anything that sticks out past the plate is counted.</li>
+    <li><b>Footprints never share a cell, and keep one cell of space.</b> An occupancy grid places buildings on land only, landmarks near the island's center, the sea gate on a front-facing shore, everyone else spread out. Spacing is relaxed only if an island runs out of room, and the check says so.</li>
+    <li><b>Nothing hides much of anything else.</b> Every building is rendered on its own and compared with what's drawn in front of it; the share of each building that stays hidden is reported.</li>
+    <li><b>Bridges are geometry.</b> Decks run from the midpoint of one shore edge to the midpoint of the other, drawn in code in the sprites' wood colors.</li>
+    <li><b>Sprites are cut out as connected shapes,</b> not by fixed grid cells, so a wide sprite can't be sliced.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Known gaps</h2>
+  <ul class="plain">
+    <li><b>Fixed in round 4:</b> the market was regenerated (its plate now measures 1.95:1 and it's placed as 2×1; a 3×1 variant exists and would be picked automatically if its plate matched better), the flags were regenerated with their footings inside the plate, and trees are back as nine sprites on 1×1 plates, placed by their own rules.</li>
+    <li><b>Tile edges still wander up to 1.4% of a tile</b> (about 3 px at 200 px per tile) because the generated tiles aren't perfectly straight. The fit hides it from overview; it's visible only if you look for it at full size.</li>
+    <li><b>Trees use 6 of the 9 types</b> on this map, because the cell hash happens to land on them. A real map would pick types per island or by biome.</li>
+    <li><b>Checks cover geometry, not taste.</b> They catch overlap, gaps, cropping and placement; whether it looks good is still your call.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>The cut-out sprites</h2>
+  <p class="muted">Buildings are shown after the plate is keyed out, with the measured plate drawn back as a thin outline. Tiles are shown after fitting to the exact diamond.</p>
+  <div id="sheets"></div>
+</section>
+</div>
+
+<script>
+const BNAMES=["Keep","Sea gate","Silos","Lighthouse","Cottage","Cottage (slate)","Market","Containers","Ruin","Flags","Construction"];
+const BKEYS=["keep","gate","silos","lighthouse","cottage","slate","market-old","containers","ruin","flags-old","construction"];
+const FOOT=[[2,2],[1,1],[2,2],[1,1],[1,1],[1,1],[2,1],[1,1],[1,1],[1,1],[1,1]];
+// round 4 sheet: market and flags regenerated, plus trees
+const XNAMES=["Market 2×1","Market 3×1","Flags","Pine","Broad-leaf tree","Three pines","Bushes","Birch","Cypress","Autumn tree","Flowering bush","Boulder + sapling"];
+const XKEYS=["market2","market3","flags","tree","tree","tree","tree","tree","tree","tree","tree","tree"];
+// footprint candidates per sprite: the one closest to the measured plate shape wins
+const XFOOT=[[[2,1],[3,1]],[[3,1],[2,1]],[[1,1]],[[1,1]],[[1,1]],[[1,1]],[[1,1]],[[1,1]],[[1,1]],[[1,1]],[[1,1]],[[1,1]]];
+const CNAMES=["Shore UL","Shore UR","Shore LR","Shore LL","Corner top","Corner right","Corner bottom","Corner left","Islet","Plain grass","No LL","No UR"];
+const COAST_MASK=[1,2,4,8,3,6,12,9,15,0,7,13]; // 1:-x 2:-y 4:+x 8:+y water
+const S={view:"fit",ov:"off"};
+const SP={};const CHK=[];
+const TWBASE=1000; // canonical tile width in "sprite space" after fitting
+
+function load(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src})}
+function keyed(img){
+  const W=img.naturalWidth,H=img.naturalHeight,c=document.createElement("canvas");c.width=W;c.height=H;
+  const x=c.getContext("2d",{willReadFrequently:true});x.drawImage(img,0,0);const d=x.getImageData(0,0,W,H),p=d.data;
+  for(let i=0;i<p.length;i+=4){const r=p[i],g=p[i+1],b=p[i+2];const m=Math.min(r,b)-g;
+    if(m>105&&Math.abs(r-b)<90){p[i+3]=0;continue}
+    if(m>25&&Math.abs(r-b)<110){const s=m-25;p[i]=Math.max(0,r-s);p[i+2]=Math.max(0,b-s);if(m>60)p[i+3]=Math.round(255*(105-m)/45)}}
+  return {W,H,p};
+}
+// connected components on the alpha mask; small specks merge into the nearest large shape
+function components(K,expect){
+  const {W,H,p}=K;const lab=new Int32Array(W*H);const comps=[];let n=0;const st=new Int32Array(W*H);
+  for(let i=0;i<W*H;i++){if(lab[i]||p[i*4+3]<=40)continue;n++;let sp=0;st[sp++]=i;lab[i]=n;let area=0,x0=W,y0=H,x1=0,y1=0,sx=0,sy=0;
+    while(sp){const j=st[--sp];area++;const xx=j%W,yy=(j/W)|0;sx+=xx;sy+=yy;if(xx<x0)x0=xx;if(xx>x1)x1=xx;if(yy<y0)y0=yy;if(yy>y1)y1=yy;
+      const nb=[j-1,j+1,j-W,j+W];for(const k of nb){if(k<0||k>=W*H)continue;if((k===j-1&&xx===0)||(k===j+1&&xx===W-1))continue;if(!lab[k]&&p[k*4+3]>40){lab[k]=n;st[sp++]=k}}}
+    comps.push({id:n,area,x0,y0,x1,y1,cx:sx/area,cy:sy/area,ids:[n]})}
+  const big=comps.filter(c=>c.area>=1500),small=comps.filter(c=>c.area<1500);
+  let merged=0,dropped=0;
+  small.forEach(s=>{let best=null,bd=1e9;big.forEach(b=>{const dx=Math.max(b.x0-s.x1,0,s.x0-b.x1),dy=Math.max(b.y0-s.y1,0,s.y0-b.y1);const d=Math.hypot(dx,dy);if(d<bd){bd=d;best=b}});
+    if(best&&bd<40){best.ids.push(s.id);best.x0=Math.min(best.x0,s.x0);best.y0=Math.min(best.y0,s.y0);best.x1=Math.max(best.x1,s.x1);best.y1=Math.max(best.y1,s.y1);merged++}else dropped++});
+  // order by the 4x3 sheet cell each shape's bounding-box centre falls in (the briefs ask for that grid)
+  const cellOf=c=>Math.min(2,Math.floor(((c.y0+c.y1)/2)/(H/3)))*4+Math.min(3,Math.floor(((c.x0+c.x1)/2)/(W/4)));
+  const ordered=big.map(c=>({c,k:cellOf(c)})).sort((a,b)=>a.k-b.k).map(o=>{o.c.cell=o.k;return o.c});
+  const touching=ordered.filter(c=>c.x0<=0||c.y0<=0||c.x1>=W-1||c.y1>=H-1).length;
+  const out=ordered.map(c=>{const w=c.x1-c.x0+1,h=c.y1-c.y0+1;const cv=document.createElement("canvas");cv.width=w;cv.height=h;const cx=cv.getContext("2d");const im=cx.createImageData(w,h);const set=new Set(c.ids);
+    for(let y=0;y<h;y++)for(let xx=0;xx<w;xx++){const si=(c.y0+y)*W+(c.x0+xx);if(set.has(lab[si])){const s4=si*4,d4=(y*w+xx)*4;im.data[d4]=p[s4];im.data[d4+1]=p[s4+1];im.data[d4+2]=p[s4+2];im.data[d4+3]=p[s4+3]}}
+    cx.putImageData(im,0,0);return {c:cv,w,h,cell:c.cell}});
+  return {out,count:ordered.length,expect,merged,dropped,touching};
+}
+const isCyan=(r,g,b)=>g>165&&b>165&&r<120&&Math.abs(g-b)<70;
+// footprint plate: left, right, front (bottom) corners from cyan pixels; back corner = left + right - front
+function plate(s){
+  const x=s.c.getContext("2d",{willReadFrequently:true});const d=x.getImageData(0,0,s.w,s.h),p=d.data;
+  let L=null,R=null,B=null,n=0;
+  for(let y=0;y<s.h;y++)for(let xx=0;xx<s.w;xx++){const i=(y*s.w+xx)*4;if(p[i+3]<120)continue;if(!isCyan(p[i],p[i+1],p[i+2]))continue;n++;
+    if(!L||xx<L[0]||(xx===L[0]&&y<L[1]))L=[xx,y];if(!R||xx>R[0]||(xx===R[0]&&y<R[1]))R=[xx,y];if(!B||y>B[1])B=[xx,y]}
+  if(n<200)return null;
+  // refine front corner x: mean x of cyan pixels on the lowest 2 rows
+  let sx=0,c=0;for(let xx=0;xx<s.w;xx++)for(let y=B[1]-1;y<=B[1];y++){const i=(y*s.w+xx)*4;if(p[i+3]>=120&&isCyan(p[i],p[i+1],p[i+2])){sx+=xx;c++}}B=[sx/c,B[1]];
+  const T=[L[0]+R[0]-B[0],L[1]+R[1]-B[1]];
+  // overhang: building pixels in the ground band (below the left/right corner line) that fall outside the plate diamond
+  const inside=(px,py)=>{const q=[T,R,B,L];let sgn=0;for(let k=0;k<4;k++){const a=q[k],b=q[(k+1)%4];const cr=(b[0]-a[0])*(py-a[1])-(b[1]-a[1])*(px-a[0]);if(cr!==0){if(sgn&&Math.sign(cr)!==sgn)return false;sgn=Math.sign(cr)}}return true};
+  let band=0,out=0;const lineY=xx=>L[1]+(R[1]-L[1])*(xx-L[0])/(R[0]-L[0]);
+  // the building's own base extent, as a share of the plate: how far its ground pixels reach toward the left, right and front corners
+  const cxp=(L[0]+R[0])/2,cyp=(L[1]+R[1])/2;const rs=[];
+  for(let y=0;y<s.h;y++)for(let xx=0;xx<s.w;xx++){const i=(y*s.w+xx)*4;if(p[i+3]<120)continue;if(isCyan(p[i],p[i+1],p[i+2]))continue;if(y<lineY(xx))continue;band++;
+    // diamond "radius" of this pixel relative to the plate: |dx|/halfwidth + dy/halfheight (1 = on the plate edge)
+    // the plate's own blurred rim (cyan blended into magenta) sits at r ≈ 1; skip it so it isn't mistaken for the building's base
+    const r=Math.abs(xx-cxp)/((R[0]-L[0])/2)+(y-cyp)/(B[1]-cyp);if(r<0.95)rs.push(r);
+    // outside = past the plate edge by more than that rim (3%)
+    if(!inside(xx+.5,y+.5)&&r>1.03)out++}
+  rs.sort((a,b)=>a-b);const reach=rs.length?rs[Math.floor(rs.length*0.995)]:1;
+  // key out cyan and despill its edge
+  for(let i=0;i<p.length;i+=4){const r=p[i],g=p[i+1],b=p[i+2];if(p[i+3]===0)continue;if(isCyan(r,g,b)){p[i+3]=0;continue}
+    const m=Math.min(g,b)-r;if(m>70&&Math.abs(g-b)<70){const k=m-70;p[i+1]=Math.max(0,g-k);p[i+2]=Math.max(0,b-k);p[i+3]=Math.min(p[i+3],Math.round(255*Math.max(0,1-(m-70)/90)))}}
+  x.putImageData(d,0,0);
+  return {L,R,B,T,band,out,reach:Math.max(0.5,Math.min(reach,1.2))};
+}
+// tile top face, measured from its colour: grass (green) or sand (light tan) pixels only, so earth and rock on the sides never count.
+// All four corners are measured; the affine fit to the exact diamond is least squares, and its residual is the honest corner error.
+// Tile top face from the silhouette: the two upper edges are fitted as straight lines (middle 60% of each, which avoids
+// the tufts at the top corner and rock bulges at the sides); T is where they meet; L and R are the outermost silhouette
+// columns near those lines; the front corner follows from the parallelogram. edgeErr is how far the real upper edges stray.
+function tileFit(s){
+  const p=s.c.getContext("2d",{willReadFrequently:true}).getImageData(0,0,s.w,s.h).data;const a=(xx,y)=>p[(y*s.w+xx)*4+3]>160;
+  const top=new Array(s.w).fill(-1),bot=new Array(s.w).fill(-1);
+  for(let xx=0;xx<s.w;xx++){for(let y=0;y<s.h;y++)if(a(xx,y)){top[xx]=y;break}for(let y=s.h-1;y>=0;y--)if(a(xx,y)){bot[xx]=y;break}}
+  let minx=0;while(top[minx]<0)minx++;let maxx=s.w-1;while(top[maxx]<0)maxx--;
+  let tx=minx;for(let xx=minx;xx<=maxx;xx++)if(top[xx]>=0&&top[xx]<top[tx])tx=xx;
+  const fitLine=(x0,x1)=>{let n=0,sx=0,sy=0,sxx=0,sxy=0;for(let xx=Math.round(x0);xx<=Math.round(x1);xx++){if(top[xx]<0)continue;n++;sx+=xx;sy+=top[xx];sxx+=xx*xx;sxy+=xx*top[xx]}const m=(n*sxy-sx*sy)/(n*sxx-sx*sx);return {m,c:(sy-m*sx)/n}};
+  // first pass with the silhouette's own centre, then refit around the measured top corner
+  const mid=(minx+maxx)/2;let Lf=fitLine(minx+(mid-minx)*0.2,minx+(mid-minx)*0.8),Rf=fitLine(mid+(maxx-mid)*0.2,mid+(maxx-mid)*0.8);
+  let Tx=(Rf.c-Lf.c)/(Lf.m-Rf.m);Lf=fitLine(minx+(Tx-minx)*0.2,minx+(Tx-minx)*0.8);Rf=fitLine(Tx+(maxx-Tx)*0.2,Tx+(maxx-Tx)*0.8);
+  Tx=(Rf.c-Lf.c)/(Lf.m-Rf.m);const T=[Tx,Lf.m*Tx+Lf.c];
+  // L: leftmost column whose top silhouette still sits on (within 3% of width of) the fitted left line; same for R
+  const width0=maxx-minx;let lx=minx;while(lx<Tx&&Math.abs(top[lx]-(Lf.m*lx+Lf.c))>width0*0.03)lx++;
+  let rx=maxx;while(rx>Tx&&Math.abs(top[rx]-(Rf.m*rx+Rf.c))>width0*0.03)rx--;
+  const L=[lx,Lf.m*lx+Lf.c],R=[rx,Rf.m*rx+Rf.c],B=[L[0]+R[0]-T[0],L[1]+R[1]-T[1]];
+  let edgeErr=0;for(let xx=Math.round(lx+(Tx-lx)*0.15);xx<=Math.round(rx-(rx-Tx)*0.15);xx++){if(top[xx]<0||Math.abs(xx-Tx)<(rx-lx)*0.08)continue;const pred=xx<Tx?Lf.m*xx+Lf.c:Rf.m*xx+Rf.c;edgeErr=Math.max(edgeErr,Math.abs(top[xx]-pred))}
+  // thickness: median of (silhouette bottom - lower edge of the top face) along the two lower edges
+  const th=[];for(let xx=Math.round(L[0]+4);xx<=Math.round(R[0]-4);xx++){if(bot[xx]<0)continue;const ey=xx<B[0]?L[1]+(B[1]-L[1])*(xx-L[0])/(B[0]-L[0]):B[1]+(R[1]-B[1])*(xx-B[0])/(R[0]-B[0]);th.push(bot[xx]-ey)}
+  th.sort((u,v)=>u-v);const width=R[0]-L[0];
+  return {T,L,R,B,thick:(th[Math.floor(th.length/2)]||0)/width,aspect:width/(B[1]-T[1]),skew:(T[0]-(L[0]+R[0])/2)/width,tilt:(R[1]-L[1])/width,edgeErr:edgeErr/width*100};
+}
+// least-squares affine from 4 source corners to 4 destination corners; returns params and the worst residual in destination px
+function affine4(src,dst){
+  const solve=(k)=>{let a=[[0,0,0],[0,0,0],[0,0,0]],b=[0,0,0];src.forEach((q,i)=>{const r=[q[0],q[1],1];for(let u=0;u<3;u++){b[u]+=r[u]*dst[i][k];for(let v=0;v<3;v++)a[u][v]+=r[u]*r[v]}});
+    const det=m=>m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1])-m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0])+m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]);const D=det(a);
+    return [0,1,2].map(c=>{const m=a.map((row,ri)=>row.map((v,ci)=>ci===c?b[ri]:v));return det(m)/D})};
+  const X=solve(0),Y=solve(1);let worst=0;src.forEach((q,i)=>{const px=X[0]*q[0]+X[1]*q[1]+X[2],py=Y[0]*q[0]+Y[1]*q[1]+Y[2];worst=Math.max(worst,Math.hypot(px-dst[i][0],py-dst[i][1]))});
+  return {A:X[0],C:X[1],E:X[2],B:Y[0],D:Y[1],F:Y[2],worst};
+}
+// warp a tile so its measured corners land on the exact diamond; then clip to the shared tile shape
+function fitTile(s,f,thick){
+  const w=TWBASE,h=w/2,th=thick*w;const cv=document.createElement("canvas");cv.width=w;cv.height=Math.ceil(h+th)+2;const x=cv.getContext("2d",{willReadFrequently:true});
+  // a 2% overscan only hides antialiasing on the clip edge; the corners themselves come from the measured top face
+  const OV=1.02,cxd=w/2,cyd=h/2;const grow=q=>[cxd+(q[0]-cxd)*OV,cyd+(q[1]-cyd)*OV];
+  const fit=affine4([f.T,f.R,f.B,f.L],[grow([w/2,0]),grow([w,h/2]),grow([w/2,h]),grow([0,h/2])]);
+  const {A,B:B_,C,D,E,F}=fit;
+  // shared tile shape: top diamond + two side faces of the canonical thickness
+  const shape=[[w/2,0],[w,h/2],[w,h/2+th],[w/2,h+th],[0,h/2+th],[0,h/2]];
+  x.beginPath();shape.forEach((q,i)=>i?x.lineTo(...q):x.moveTo(...q));x.closePath();
+  x.save();x.clip();x.setTransform(A,B_,C,D,E,F);x.drawImage(s.c,0,0);x.restore();
+  // coverage: share of the exact top diamond that ended up transparent (a gap)
+  const d=x.getImageData(0,0,w,Math.ceil(h)).data;let inD=0,gap=0;
+  for(let yy=1;yy<h-1;yy+=2)for(let xx=1;xx<w-1;xx+=2){if(Math.abs(xx-w/2)/(w/2)+Math.abs(yy-h/2)/(h/2)>0.985)continue;inD++;if(d[(yy*w+xx)*4+3]<200)gap++}
+  return {c:cv,w:cv.width,h:cv.height,gap:inD?gap/inD*100:0,err:f.edgeErr};
+}
+
+/* ---------- map and layout ---------- */
+const MAP=[
+  "......................",
+  "..gggg................",
+  ".gggggg......gggggg...",
+  ".ggtggg.....gggggggg..",
+  ".gggggg.....ggggtggg..",
+  "..ggggg.....gggggggg..",
+  "...ggg......gggggggg..",
+  "............ggtggggg..",
+  ".............gggggg...",
+  "......................",
+  "......................",
+  "......................",
+  "..gggg................",
+  ".gggggg...............",
+  ".ggtggg...............",
+  ".gggggg...............",
+  "..gggg................",
+  "......................",
+];
+const land=(gx,gy)=>!!(MAP[gy]&&MAP[gy][gx]&&MAP[gy][gx]!==".");
+const ISLANDS=[
+  {name:"api",seed:[3,3],label:[0.2,6.6],list:[["gate","gate"],["lighthouse","landmark"],["containers"],["ruin"],["flags"],["cottage"]]},
+  {name:"payments",seed:[15,5],label:[17.2,10.4],list:[["keep","landmark"],["silos"],["market"],["cottage"],["slate"],["construction"],["flags"]]},
+  {name:"auth",seed:[3,14],label:[3.8,18.1],list:[["keep","landmark"],["slate"],["ruin"],["cottage"]]},
+];
+const byKey=k=>SP.b.findIndex(s=>s.key===k);
+function islandCells(seed){const seen=new Set(),q=[seed],out=[];while(q.length){const [x,y]=q.pop();const k=x+","+y;if(seen.has(k)||!land(x,y))continue;seen.add(k);out.push([x,y]);q.push([x+1,y],[x-1,y],[x,y+1],[x,y-1])}return out}
+function layout(){
+  const occ=new Map();const placed=[];let relaxed=0,failed=0;
+  // bridge landings are roads: the land cell each bridge touches and the cell behind it stay free of buildings
+  const ROAD=new Set();BRIDGES.forEach(br=>{const alongX=br.a[1]===br.b[1];[[br.a,-1],[br.b,1]].forEach(([e,dir])=>{for(let k=0;k<2;k++){
+    const cx=alongX?Math.floor(e[0])+(dir>0?k:-1-k):Math.floor(e[0]),cy=alongX?Math.floor(e[1]):Math.floor(e[1])+(dir>0?k:-1-k);ROAD.add(cx+","+cy)}})});
+  ROAD.forEach(k=>occ.set(k,-1));
+  const free=(x,y,w,d,gap)=>{for(let i=-gap;i<w+gap;i++)for(let j=-gap;j<d+gap;j++){const inFoot=i>=0&&i<w&&j>=0&&j<d;if(inFoot&&!land(x+i,y+j))return false;if(occ.has((x+i)+","+(y+j)))return false}return true};
+  ISLANDS.forEach(isl=>{const cells=islandCells(isl.seed);const cx=cells.reduce((a,c)=>a+c[0],0)/cells.length,cy=cells.reduce((a,c)=>a+c[1],0)/cells.length;
+    isl.list.forEach(([key,role])=>{const bi=byKey(key);if(bi<0){failed++;return}const [w,d]=SP.b[bi].foot;let best=null,bs=-1e9,usedGap=1;
+      for(const gap of [1,0]){cells.forEach(([x,y])=>{if(!free(x,y,w,d,gap))return;const mx=x+w/2,my=y+d/2;let sc;
+          if(role==="landmark")sc=-Math.hypot(mx-cx,my-cy);
+          else if(role==="gate"){const front=!land(x+1,y)||!land(x,y+1);sc=front?(x+y)-0.2*Math.hypot(mx-cx,my-cy):-1e6}
+          else{let md=1e9;placed.filter(p=>p.isl===isl.name).forEach(p=>{md=Math.min(md,Math.hypot(mx-(p.x+p.w/2),my-(p.y+p.d/2)))});sc=Math.min(md,4)-0.15*Math.hypot(mx-cx,my-cy)+((x*7+y*3)%5)*0.01}
+          if(sc>bs){bs=sc;best=[x,y]}});if(best){usedGap=gap;break}}
+      if(!best){failed++;return}if(usedGap===0)relaxed++;
+      for(let i=0;i<w;i++)for(let j=0;j<d;j++)occ.set((best[0]+i)+","+(best[1]+j),bi);placed.push({bi,x:best[0],y:best[1],w,d,isl:isl.name})})});
+  // verification pass, independent of the placer
+  const seen=new Map();let overlaps=0,offLand=0,crowd=0,onRoad=0;
+  placed.forEach((p,k)=>{for(let i=0;i<p.w;i++)for(let j=0;j<p.d;j++){const key=(p.x+i)+","+(p.y+j);if(seen.has(key))overlaps++;seen.set(key,k);if(!land(p.x+i,p.y+j))offLand++;if(ROAD.has(key))onRoad++}});
+  placed.forEach((p,k)=>{for(let i=-1;i<=p.w;i++)for(let j=-1;j<=p.d;j++){const o=seen.get((p.x+i)+","+(p.y+j));if(o!==undefined&&o!==k){crowd++;return}}});
+  // trees: any free land cell that is not a road and not directly in front of a building (the cells along its +x and +y
+  // sides, where a tree would be drawn over it); deterministic, about one in three eligible cells
+  const front=new Set();placed.forEach(p=>{for(let i=0;i<=p.w;i++)front.add((p.x+i)+","+(p.y+p.d));for(let j=0;j<=p.d;j++)front.add((p.x+p.w)+","+(p.y+j))});
+  const treeIdx=SP.b.map((s,i)=>s.key==="tree"?i:-1).filter(i=>i>=0);const trees=[];
+  if(treeIdx.length)ISLANDS.forEach(isl=>islandCells(isl.seed).forEach(([x,y])=>{const k=x+","+y;if(occ.has(k)||front.has(k))return;
+    const h=((x*73856093)^(y*19349663))>>>0;if(h%3!==0)return;const bi=treeIdx[(h>>>3)%treeIdx.length];occ.set(k,bi);trees.push({bi,x,y,w:1,d:1,isl:isl.name,tree:true})}));
+  let treeOnFoot=0,treeFront=0;trees.forEach(t=>{const k=t.x+","+t.y;if(seen.has(k))treeOnFoot++;if(front.has(k))treeFront++;if(ROAD.has(k))treeOnFoot++});
+  return {placed,trees,relaxed,failed,overlaps,offLand,crowd,onRoad,roads:ROAD.size,treeOnFoot,treeFront};
+}
+const BRIDGES=[{a:[7,4.5],b:[12,4.5]},{a:[3.5,7],b:[3.5,12]}];
+const SHIPS=[[10,7.5],[8,14]];
+const LANE=[[6.6,14.6],[9.5,12.6],[12.4,10.2],[14.4,9.1]];
+
+/* ---------- drawing ---------- */
+function drawScene(target,TW,opts={}){
+  const TH=TW/2;const cols=MAP[0].length,rows=MAP.length;
+  const W=Math.ceil((cols+rows)*TW/2+TW),H=Math.ceil((cols+rows)*TH/2+TW*2.2);
+  target.width=W;target.height=H;const x=target.getContext("2d");x.imageSmoothingQuality="high";
+  const ox=rows*TW/2+TW/2,oy=TW*1.6;const P=(gx,gy)=>[ox+(gx-gy)*TW/2,oy+(gx+gy)*TH/2];
+  const thick=SP.thick*TW;
+  const g=x.createLinearGradient(0,0,0,H);g.addColorStop(0,"#5FA8B4");g.addColorStop(1,"#3A8496");x.fillStyle=g;x.fillRect(0,0,W,H);
+  x.strokeStyle="rgba(255,255,255,.16)";x.lineWidth=Math.max(1,TW/60);for(let i=0;i<140;i++){const px=(i*137%97)/97*W,py=(i*71%89)/89*H;x.beginPath();x.moveTo(px,py);x.quadraticCurveTo(px+TW*.08,py-TW*.03,px+TW*.16,py);x.stroke()}
+  for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++)if(land(gx,gy)){const c=[P(gx-.3,gy-.3),P(gx+1.3,gy-.3),P(gx+1.3,gy+1.3),P(gx-.3,gy+1.3)].map(q=>[q[0],q[1]+thick*.7]);
+    x.fillStyle="rgba(150,225,215,.2)";x.beginPath();c.forEach((q,i)=>i?x.lineTo(...q):x.moveTo(...q));x.fill()}
+  const items=[];
+  // tiles: every tile is drawn into the exact diamond at its grid position
+  for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++){if(!land(gx,gy))continue;
+    const m=(land(gx-1,gy)?0:1)|(land(gx,gy-1)?0:2)|(land(gx+1,gy)?0:4)|(land(gx,gy+1)?0:8);
+    // interior cells use the coast set's plain grass; the round-1 trees tile has a different grass and showed as a square
+    let t;if(m===0){t=SP.cf[9]}else{let best=9,bd=99;COAST_MASK.forEach((cm,i)=>{let d=0,v=cm^m;while(v){d+=v&1;v>>=1}if(d<bd){bd=d;best=i}});t=SP.cf[best]}
+    items.push({d:gx+gy,k:0,draw:()=>{if(opts.only!==undefined)return;const [tx,ty]=P(gx,gy);x.drawImage(t.c,tx-TW/2,ty,TW,t.h*TW/TWBASE)}})}
+  // bridges in code
+  BRIDGES.forEach(br=>{const alongX=br.a[1]===br.b[1];const d0=br.a[0]+br.a[1];items.push({d:d0+.2,k:.5,draw:()=>{if(opts.only===undefined)bridge(br,alongX)}})});
+  function bridge(br,alongX){const hw=0.22,deckT=0.08;const [ax,ay]=br.a,[bx,by]=br.b;
+    const q=(u,v,z)=>{const [px,py]=alongX?P(u,ay+v):P(ax+v,u);return [px,py-z*TW]};const u0=alongX?ax:ay,u1=alongX?bx:by;
+    const water=SP.thick; // water surface sits one tile thickness below the land top
+    // posts
+    for(let u=u0+0.5;u<u1;u+=1){[-hw+.03,hw-.03].forEach(v=>{const a=q(u,v,0),b=q(u,v,-water*0.5);x.strokeStyle="#5B3E25";x.lineWidth=TW*0.035;x.beginPath();x.moveTo(...a);x.lineTo(...b);x.stroke()})}
+    // deck side and top
+    const poly=(pts,f)=>{x.beginPath();pts.forEach((p,i)=>i?x.lineTo(...p):x.moveTo(...p));x.closePath();x.fillStyle=f;x.fill()};
+    poly([q(u0,hw,0),q(u1,hw,0),q(u1,hw,-deckT),q(u0,hw,-deckT)],"#7A5432");
+    if(alongX)poly([q(u1,-hw,0),q(u1,hw,0),q(u1,hw,-deckT),q(u1,-hw,-deckT)],"#6A472A");
+    poly([q(u0,-hw,0),q(u1,-hw,0),q(u1,hw,0),q(u0,hw,0)],"#B98652");
+    x.strokeStyle="rgba(90,60,30,.55)";x.lineWidth=Math.max(1,TW/90);for(let u=u0+0.12;u<u1;u+=0.12){const a=q(u,-hw,0),b=q(u,hw,0);x.beginPath();x.moveTo(...a);x.lineTo(...b);x.stroke()}
+    // rope rails on short posts
+    [-hw,hw].forEach(v=>{x.strokeStyle="#5B3E25";x.lineWidth=TW*0.025;for(let u=u0;u<=u1+1e-6;u+=0.5){const a=q(u,v,0),b=q(u,v,0.11);x.beginPath();x.moveTo(...a);x.lineTo(...b);x.stroke()}
+      x.strokeStyle="#D9C08C";x.lineWidth=Math.max(1,TW/80);x.beginPath();for(let u=u0;u<=u1+1e-6;u+=0.05){const sag=0.025*Math.sin(((u-u0)%0.5)/0.5*Math.PI);const p=q(u,v,0.1-sag);u===u0?x.moveTo(...p):x.lineTo(...p)}x.stroke()});
+  }
+  // buildings: plate centre to footprint centre, plate size to footprint size
+  const all=[...SP.layout.placed,...SP.layout.trees];
+  all.forEach((pl,k)=>{items.push({d:pl.x+pl.w-1+pl.y+pl.d-1+.6,k:1,draw:()=>building(pl,opts.only===undefined||opts.only===k,opts.maskOnly)})});
+  function building(pl,show){if(!show)return;const s=SP.b[pl.bi];const pt=s.plate;const unit=Math.hypot(TW/2,TH/2);
+    // the smaller of the two axis scales, so a plate the generator drew too long still fits inside its footprint;
+    // buildings then grow so their own base (not the cyan margin around it) fills 92% of the footprint; trees don't grow
+    const grow=pl.tree?1:Math.min(1.5,0.92/pt.reach);
+    const sc=Math.min((pl.w*unit)/Math.hypot(pt.B[0]-pt.L[0],pt.B[1]-pt.L[1]),(pl.d*unit)/Math.hypot(pt.R[0]-pt.B[0],pt.R[1]-pt.B[1]))*grow;
+    const pcx=(pt.L[0]+pt.R[0])/2,pcy=(pt.L[1]+pt.R[1])/2;const [fx,fy]=P(pl.x+pl.w/2,pl.y+pl.d/2);
+    x.drawImage(s.c,fx-pcx*sc,fy-pcy*sc,s.w*sc,s.h*sc)}
+  // ships and lane
+  SHIPS.forEach(([gx,gy])=>items.push({d:gx+gy,k:1,draw:()=>{if(opts.only!==undefined)return;const s=SP.ship;const [cx,cy0]=P(gx,gy);const cy=cy0+thick;const sc=(TW*0.95)/s.w;
+    x.fillStyle="rgba(255,255,255,.3)";x.beginPath();x.ellipse(cx,cy,TW*.5,TH*.22,0,0,7);x.fill();x.drawImage(s.c,cx-s.w*sc/2,cy-s.h*sc*0.9,s.w*sc,s.h*sc)}}));
+  items.push({d:99,k:2,draw:()=>{if(opts.only!==undefined)return;const pts=LANE.map(p=>{const q=P(p[0],p[1]);return [q[0],q[1]+thick]});x.save();x.lineCap="round";x.lineJoin="round";
+    x.strokeStyle="rgba(255,214,120,.33)";x.lineWidth=TW*0.2;sk(pts);x.strokeStyle="#FFE3A3";x.lineWidth=TW*0.045;x.setLineDash([TW*0.14,TW*0.1]);sk(pts);x.restore()}});
+  function sk(pts){x.beginPath();pts.forEach((p,i)=>i?x.lineTo(...p):x.moveTo(...p));x.stroke()}
+  if(opts.only!==undefined){x.clearRect(0,0,W,H)}
+  items.sort((a,b)=>a.d-b.d||a.k-b.k).forEach(it=>it.draw());
+  if(opts.only===undefined){
+    if(S.ov==="grid"){x.lineWidth=1;x.strokeStyle="rgba(255,255,255,.45)";for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++)if(land(gx,gy)){const c=[P(gx,gy),P(gx+1,gy),P(gx+1,gy+1),P(gx,gy+1)];x.beginPath();c.forEach((q,i)=>i?x.lineTo(...q):x.moveTo(...q));x.closePath();x.stroke()}
+      x.lineWidth=2;x.strokeStyle="#7CFFB2";SP.layout.trees.forEach(p=>{const c=[P(p.x,p.y),P(p.x+1,p.y),P(p.x+1,p.y+1),P(p.x,p.y+1)];x.beginPath();c.forEach((q,i)=>i?x.lineTo(...q):x.moveTo(...q));x.closePath();x.stroke()});
+      x.lineWidth=2.5;x.strokeStyle="#FFD23F";SP.layout.placed.forEach(p=>{const c=[P(p.x,p.y),P(p.x+p.w,p.y),P(p.x+p.w,p.y+p.d),P(p.x,p.y+p.d)];x.beginPath();c.forEach((q,i)=>i?x.lineTo(...q):x.moveTo(...q));x.closePath();x.stroke()})}
+    x.font=`800 ${Math.round(TW*.3)}px 'Bricolage Grotesque',sans-serif`;x.textAlign="center";
+    ISLANDS.forEach(isl=>{const [lx,ly]=P(...isl.label);x.lineWidth=Math.max(3,TW/25);x.strokeStyle="rgba(20,50,60,.55)";x.strokeText(isl.name,lx,ly);x.fillStyle="#fff";x.fillText(isl.name,lx,ly)})}
+  return {W,H};
+}
+function occlusion(){
+  // render each building alone and all buildings together at a fixed scale; hidden share = own pixels covered by something drawn in front
+  // trees count as things that can hide a building; only buildings are scored
+  const TW=90;const tmp=document.createElement("canvas");const res=[];const masks=[];const all=[...SP.layout.placed,...SP.layout.trees];
+  all.forEach((pl,k)=>{drawScene(tmp,TW,{only:k});const d=tmp.getContext("2d").getImageData(0,0,tmp.width,tmp.height).data;const m=new Uint8Array(tmp.width*tmp.height);for(let i=0;i<m.length;i++)m[i]=d[i*4+3]>128?1:0;masks.push(m)});
+  const order=all.map((p,k)=>({k,d:p.x+p.w-1+p.y+p.d-1+(p.tree?0:0)})).sort((a,b)=>a.d-b.d).map(o=>o.k);
+  order.forEach((k,idx)=>{if(all[k].tree)return;const m=masks[k];let own=0,hid=0;const front=order.slice(idx+1).map(j=>masks[j]);for(let i=0;i<m.length;i++){if(!m[i])continue;own++;for(const f of front){if(f[i]){hid++;break}}}
+    res.push({k,name:SP.b[all[k].bi].name,isl:all[k].isl,pct:own?hid/own*100:0})});
+  return res.sort((a,b)=>b.pct-a.pct);
+}
+
+/* ---------- checks table ---------- */
+function addCheck(name,status,value,how){CHK.push([name,status,value,how])}
+function renderChecks(){const tb=document.getElementById("checks");tb.textContent="";CHK.forEach(([n,s,v,h])=>{const tr=document.createElement("tr");
+  const a=document.createElement("td");a.textContent=n;const b=document.createElement("td");const pill=document.createElement("span");pill.className="pill "+s;pill.textContent={pass:"pass",warn:"watch",fail:"fail",info:"info"}[s];b.append(pill);
+  const c=document.createElement("td");c.className="v";c.textContent=v;const d=document.createElement("td");d.textContent=h;tr.append(a,b,c,d);tb.append(tr)})}
+
+function render(){
+  const cv=document.getElementById("scene");const stage=document.getElementById("stage");
+  if(S.view==="full"){drawScene(cv,200);cv.style.width=cv.width+"px";cv.style.height=cv.height+"px"}
+  else{const avail=stage.clientWidth;const cols=MAP[0].length,rows=MAP.length;const TW=Math.min(140,(avail*Math.min(2,devicePixelRatio||1))/((cols+rows)/2+1));drawScene(cv,TW);cv.style.width="100%";cv.style.height="auto"}
+  document.getElementById("cap").textContent=S.view==="full"?"Full size: one tile is 200 px wide. Scroll inside the frame to inspect edges, footprints and bridge ends.":"Whole map. Switch to Full size to inspect at 200 px per tile, or turn on the grid overlay to see tiles and building footprints.";
+}
+
+function renderSheets(){
+  const root=document.getElementById("sheets");
+  const group=(label,list,draw)=>{const h=document.createElement("h3");h.textContent=label;h.style.marginTop="14px";const grid=document.createElement("div");grid.className="grid";
+    list.forEach((s,i)=>{const cell=document.createElement("div");cell.className="cell";const cv=document.createElement("canvas");cv.width=300;cv.height=300;const x=cv.getContext("2d");draw(x,s,i);
+      const n=document.createElement("span");n.textContent=s.name;const m=document.createElement("span");m.className="m";m.textContent=s.meta||"";cell.append(cv,n,m);grid.append(cell)});root.append(h,grid)};
+  group("Buildings, market, flags and trees, plate keyed out (plate outline in yellow)",SP.b.filter(s=>!/-old$/.test(s.key)),(x,s)=>{const sc=Math.min(280/s.w,280/s.h);const ox=150-s.w*sc/2,oy=150-s.h*sc/2;x.drawImage(s.c,ox,oy,s.w*sc,s.h*sc);
+    if(s.plate){const q=[s.plate.T,s.plate.R,s.plate.B,s.plate.L];x.strokeStyle="#E8B400";x.lineWidth=2;x.beginPath();q.forEach((p,i)=>{const a=[ox+p[0]*sc,oy+p[1]*sc];i?x.lineTo(...a):x.moveTo(...a)});x.closePath();x.stroke()}});
+  group("Coast tiles, fitted to the exact diamond",SP.cf,(x,s)=>{const sc=280/s.w;x.drawImage(s.c,10,150-s.h*sc/2,280,s.h*sc)});
+}
+
+document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{S[b.dataset.k]=b.dataset.v;
+  document.querySelectorAll(`.seg button[data-k="${b.dataset.k}"]`).forEach(o=>o.setAttribute("aria-pressed",String(o===b)));render()}));
+
+(async()=>{
+  try{
+    const A="../../assets/sprites/";
+    const [bi,ci,si,xi]=await Promise.all([A+"buildings.png",A+"coast.png",A+"ship.png",A+"market-flags-trees.png"].map(load));
+    const bc=components(keyed(bi),11),cc=components(keyed(ci),12),sc=components(keyed(si),1),xc=components(keyed(xi),12);
+    addCheck("Sprites found as connected shapes",bc.count===11&&cc.count===12&&sc.count===1&&xc.count===12?"pass":"fail",`buildings ${bc.count}/11 · market, flags + trees ${xc.count}/12 · coast ${cc.count}/12 · ship ${sc.count}/1`,"Flood fill over the keyed alpha; specks under 1,500 px merge into the nearest shape within 40 px.");
+    addCheck("Sprites cropped at the sheet edge",bc.touching+cc.touching+sc.touching+xc.touching===0?"pass":"fail",`${bc.touching+cc.touching+sc.touching+xc.touching}`,"Shapes whose bounding box touches the image border. Cutting by shape means no fixed cell can slice a sprite.");
+    // buildings and plates; the footprint is the candidate closest to the measured plate shape
+    const mk=(s,name,key,cands)=>{const o={...s,name,key};const pt=plate(o);o.plate=pt;if(!pt){o.foot=cands[0];o.meta="no plate found";return o}
+      const lw=Math.hypot(pt.B[0]-pt.L[0],pt.B[1]-pt.L[1]),ld=Math.hypot(pt.R[0]-pt.B[0],pt.R[1]-pt.B[1]);const ratio=lw/ld;
+      o.foot=cands.slice().sort((a,b)=>Math.abs(Math.log(ratio/(a[0]/a[1])))-Math.abs(Math.log(ratio/(b[0]/b[1]))))[0];
+      o.asp=Math.abs(ratio/(o.foot[0]/o.foot[1])-1)*100;o.over=pt.band?pt.out/pt.band*100:0;o.ratio=ratio;
+      o.meta=`plate ${o.foot[0]}×${o.foot[1]} (measured ${ratio.toFixed(2)}:1) · overhang ${o.over.toFixed(1)}%`;return o};
+    SP.b=[...bc.out.map((s,i)=>mk(s,BNAMES[i],BKEYS[i],[FOOT[i]])),...xc.out.map((s,i)=>mk(s,XNAMES[i],XKEYS[i],XFOOT[i]))];
+    // of the two regenerated markets, use the one whose plate best matches the footprint it lands on
+    const mkts=SP.b.filter(s=>s.key==="market2"||s.key==="market3").sort((a,b)=>(a.asp??99)-(b.asp??99));if(mkts[0])mkts[0].key="market";
+    const usedKeys=new Set(ISLANDS.flatMap(i=>i.list.map(l=>l[0])).concat(["tree"]));const used=SP.b.filter(s=>usedKeys.has(s.key));
+    const plates=used.filter(s=>s.plate).length;const wa=used.reduce((m,s)=>(s.asp??0)>m.v?{v:s.asp,n:s.name}:m,{v:0,n:""});const wo=used.reduce((m,s)=>(s.over??0)>m.v?{v:s.over,n:s.name}:m,{v:0,n:""});
+    const mk0=SP.b.find(s=>s.key==="market");
+    addCheck("Footprint plates detected",plates===used.length?"pass":"fail",`${plates}/${used.length} sprites in use`,"Cyan pixels per sprite; left, right and front corners give the plate, the back corner follows from the parallelogram.");
+    addCheck("Market footprint",mk0&&mk0.asp<8?"pass":mk0&&mk0.asp<15?"warn":"fail",mk0?`${mk0.name}: plate measured ${mk0.ratio.toFixed(2)}:1, placed as ${mk0.foot[0]}×${mk0.foot[1]}`:"none","Both regenerated markets are measured; the one closest to a 2×1 or 3×1 footprint is used, on the footprint its plate actually matches.");
+    addCheck("Plate shape matches its footprint",wa.v<8?"pass":wa.v<15?"warn":"fail",`worst ${wa.v.toFixed(1)}% off (${wa.n})`,"Ratio of the plate's two edge lengths against the footprint it's placed on, for sprites in use.");
+    addCheck("Base inside its footprint",wo.v<3?"pass":wo.v<8?"warn":"fail",`worst ${wo.v.toFixed(1)}% (${wo.n})`,"Share of a sprite's ground-level pixels (below the plate's left-right line) that fall outside the plate diamond, for sprites in use.");
+    // tiles: measure, then fit
+    SP.cRaw=cc.out.map((s,i)=>({...s,name:CNAMES[i]}));
+    // the coast set is all flat-topped, including its plain grass tile, which fills island interiors
+    const fits=SP.cRaw.map(s=>({s,f:tileFit(s)}));const thicks=fits.map(o=>o.f.thick).sort((a,b)=>a-b);SP.thick=thicks[Math.floor(thicks.length/2)];
+    const worstSkew=Math.max(...fits.map(o=>Math.abs(o.f.skew)))*100,worstAspect=Math.max(...fits.map(o=>Math.abs(o.f.aspect/2-1)))*100,worstTilt=Math.max(...fits.map(o=>Math.abs(o.f.tilt)))*100;
+    addCheck("Raw tile drift before fitting","info",`aspect ${worstAspect.toFixed(1)}% · skew ${worstSkew.toFixed(1)}% · tilt ${worstTilt.toFixed(1)}%`,"How far the generated top faces were from an exact 2:1 diamond (worst tile). This drift caused round 2's overlaps; the fit removes it.");
+    addCheck("Tile thickness spread before clipping","info",`${(thicks[0]*100).toFixed(1)}–${(thicks[thicks.length-1]*100).toFixed(1)}% of tile width`,"Every tile is clipped to the median thickness, so coast edges line up.");
+    SP.cf=SP.cRaw.map(s=>{const f=fits.find(o=>o.s===s).f;const t=fitTile(s,f,SP.thick);t.name=s.name;t.meta=`skew ${(f.skew*100).toFixed(1)}% · aspect ${(f.aspect).toFixed(2)}`;return t});
+    addCheck("Tile overlap after fitting","pass","0 px by construction","Each tile is drawn inside the exact grid diamond plus a shared side shape; diamonds on a grid share edges and never overlap.");
+    // only tiles the map uses (the coast set, including its plain grass)
+    const errs=SP.cf.map(t=>t.err);const we=Math.max(...errs);
+    addCheck("Tile edge error after fitting",we<1?"pass":we<2.5?"warn":"fail",`worst ${we.toFixed(2)}% of tile width (${(we*2).toFixed(1)} px at 200 px/tile)`,"The tile's real upper edges against the straight edges of the diamond it was fitted to (worst pixel column, corners excluded). Where they stray, the tile's own edge shows as a wobble or seam.");
+    const gaps=SP.cf.map(t=>t.gap);const wg=Math.max(...gaps);
+    addCheck("Gaps inside a tile's top face",wg<0.5?"pass":wg<2?"warn":"fail",`worst ${wg.toFixed(2)}% of the diamond`,"Share of the exact top diamond left transparent after fitting (sampled every 2 px). Gaps here show up as dark seams between tiles.");
+    window.__SP=SP;
+    SP.ship=sc.out[0];
+    // layout
+    SP.layout=layout();const L=SP.layout;
+    addCheck("Footprints overlapping",L.overlaps===0?"pass":"fail",`${L.overlaps}`,"Independent pass over the occupancy grid after placement.");
+    addCheck("Footprints off land",L.offLand===0?"pass":"fail",`${L.offLand}`,"Footprint cells that are water.");
+    addCheck("Buildings on a bridge landing",L.onRoad===0?"pass":"fail",`${L.onRoad} of ${L.roads} road cells`,"Each bridge's landing cell and the cell behind it are reserved as road before buildings are placed.");
+    addCheck("Buildings without one free cell around them",L.crowd===0?"pass":"warn",`${L.crowd} of ${L.placed.length}${L.relaxed?` (spacing relaxed for ${L.relaxed})`:""}`,"Neighbors within one cell of a footprint. Spacing keeps tall buildings from hiding the ones behind them.");
+    if(L.failed)addCheck("Buildings that found no place","fail",`${L.failed}`,"No legal footprint left on the island.");
+    addCheck("Trees placed","info",`${L.trees.length} on ${new Set(L.trees.map(t=>t.bi)).size} tree types`,"About one in three free land cells, chosen by a fixed hash of the cell so the layout is stable between loads.");
+    addCheck("Trees on a footprint or road",L.treeOnFoot===0?"pass":"fail",`${L.treeOnFoot}`,"Tree cells that are also a building footprint or a bridge landing.");
+    addCheck("Trees directly in front of a building",L.treeFront===0?"pass":"fail",`${L.treeFront}`,"Cells along a building's +x and +y sides, where a tree would be drawn over the building, are kept clear.");
+    const occ=occlusion();const worst=occ[0];const over10=occ.filter(o=>o.pct>10).length;
+    addCheck("Share of a building hidden by others",worst.pct<10?"pass":worst.pct<20?"warn":"fail",`worst ${worst.pct.toFixed(1)}% (${worst.name}, ${worst.isl}) · ${over10} over 10%`,"Each building rendered alone vs. everything drawn in front of it, at 90 px per tile.");
+    const exact=[],miss=[];for(let gy=0;gy<MAP.length;gy++)for(let gx=0;gx<MAP[0].length;gx++){if(!land(gx,gy))continue;const m=(land(gx-1,gy)?0:1)|(land(gx,gy-1)?0:2)|(land(gx+1,gy)?0:4)|(land(gx,gy+1)?0:8);if(!m)continue;(COAST_MASK.includes(m)?exact:miss).push(m)}
+    addCheck("Shore cells with an exact coast tile",miss.length===0?"pass":"warn",`${exact.length}/${exact.length+miss.length}`,"Cells whose water-neighbor pattern has a tile in the coast set; the rest use the closest tile.");
+    addCheck("Bridge ends on shore edges","pass","0 px by construction","Decks start and end at the midpoint of the shore cell's edge, in grid coordinates.");
+    renderChecks();renderSheets();await (document.fonts?document.fonts.ready:Promise.resolve());render();
+    window.__checks=CHK;window.__occ=occ;
+    let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(render,150)});
+  }catch(e){document.getElementById("cap").textContent="Couldn't build the scene: "+(e&&e.message||e);console.error(e)}
+})();
+</script>

@@ -5,6 +5,7 @@ Branch: unknown
 Repo: meta-hackathon (no repo yet)
 Status: APPROVED
 Mode: Builder
+Visual direction: DECIDED 2026-10-26 (moodboard gate passed). The "city" in this document is rendered as a low-poly quest archipelago; see the Visual Direction section below and DESIGN.md, which is authoritative for anything visual.
 
 ## Problem Statement
 
@@ -58,13 +59,33 @@ Approach B, because the anti-dashboard rule and the lightweight-AAA premise are 
 
 Open rule check before committing the agent runtime: confirm what counts for "Use of Meta AI tooling" and whether the coding agent itself must run on a Meta model. That answer decides OpenHands/Llama versus a stronger model for edits with Llama on the city layer.
 
-Visual direction is NOT settled. Three generated mockups (Factorio Dusk, Clean SimCity, Night Grid, in ~/.gstack/projects/meta-hackathon/designs/mockup-20261026/) were all rejected in session. Next visual step is a moodboard round, then regenerate.
+Visual direction was settled on 2026-10-26 after a moodboard round; see the next section. The three first-round mockups (Factorio Dusk, Clean SimCity, Night Grid, in ~/.gstack/projects/meta-hackathon/designs/mockup-20261026/) stay rejected.
+
+## Visual Direction (decided 2026-10-26)
+
+The map is a **low-poly quest archipelago**. DESIGN.md is the source of truth; this section records how it maps onto the contracts above and below, which keep their wording.
+
+| Contract term | Rendered as |
+|---|---|
+| District (directory-first module) | An island |
+| Road (factual import edge) | A bridge between islands |
+| Drag-connect road before confirmation | A glowing dashed lane on the water; it becomes a bridge only after a real import exists |
+| Building (file) | A building whose type comes from what the file does (keep, sea gate, silos, lighthouse, market, containers, ruin, cottage) |
+| Worker / session | A ship with an orange sail, plus a token in the bottom command bar |
+| Scaffolding on the active building | Construction sprite over the building being edited, windows lit on file touch |
+| Failed tests | A red pennant over the covered buildings (green when passing) |
+| New files at the district edge | New buildings on the island; a new module raises a new island |
+
+- **How it was decided.** Moodboard v2 (34 references, voted): keeps on separate islands, a Dorfromantik-style board, buildings whose function reads from shape, lights as activity; kills on dense realism. Dino's notes added a command center for agent CRUD (a bottom bar and quest log, not a sidebar) and quests ("Make a new module" raises an island). Concept board: Codex over Muse for art ("Muse was smarter but had worse taste. Codex has incredible taste."). Style switched from pixel art to stylized low-poly at the sprite spike.
+- **Placeholder art is no longer open.** Codex generates sprite sheets on magenta with cyan footprint plates; the client measures and places them. Four spike rounds proved the pipeline (https://claude.ai/artifact/LBVcGZJPPyKJfaCbiHBxWB): sprites cut out as shapes, tiles fitted to the exact grid, an occupancy grid with spacing and reserved bridge landings, bridges and lanes drawn in code, and live geometry checks. One check still sits at "watch": tile edges wander up to 1.39% of a tile against a 1% target.
+- **Honesty contract carries over.** Ships sail on session start, windows light on file-touched events, scaffolding appears while a file is edited, pennants follow test results. Agents never animate along bridges or lanes.
+- **Not decided here:** Muse's role (planning, naming, reports) beyond art, and the exact command bar and report card visuals, which are specified in DESIGN.md but not mocked yet.
 
 ## Open Questions
 
 - What exactly does "Use of Meta AI tooling" require, and can the code-editing agent run on a non-Meta model while Llama runs the city intelligence?
 - Which agent runtime: OpenHands headless, an existing coding-agent CLI per session, or a minimal tool-calling loop? Decided by the rule check above plus a day-1 spike.
-- Visual direction: pending the moodboard.
+- Visual direction: decided 2026-10-26 (quest archipelago, see Visual Direction and DESIGN.md). Still open: the command bar and report card visuals, and whether Muse gets a role beyond the Llama naming and reports.
 - How are districts defined on a messy vibe-coded repo with weak folder structure: directories, import-graph communities (Louvain), or a hybrid? Needs a test on the friend's real repo.
 
 ## Success Criteria
@@ -82,7 +103,7 @@ Public GitHub repo (a submission requirement), local browser app run from the re
 1. Rule check on Meta AI tooling, then a day-1 spike: repo to import graph to districts on the friend's real repo (TS/JS first).
 2. Live loop on a fixed layout: agent file events move the worker, scaffolding on the active building, English report on finish.
 3. Session CRUD on the map (create, inspect, pause/stop, delete/archive), one worktree per session, plus the one real drag-connect dispatch.
-4. Moodboard, then visual direction, then polish. No Approach C footprint work in the submission scope.
+4. Visual direction is decided (quest archipelago, DESIGN.md); next is building the sprite pipeline into the Pixi client and mocking the command bar and report card, then polish. No Approach C footprint work in the submission scope.
 5. Rehearse the exact 3-minute demo on the friend's repo; record a live run and label anything scripted.
 
 ## What I noticed about how you think
@@ -669,7 +690,7 @@ any --crash/stall--> failed/stalled marker --restart/discard--> working | archiv
 | Server core: scan, districts, SQLite, event log, WebSocket | server/ | spikes |
 | Session layer: worktrees, locks, lifecycle, finish flow | server sessions/ | server core |
 | City client: Pixi render, worker, drag, report cards | client/ | server core (event contract) |
-| Visual direction: moodboard, tileset, polish | client art/ | city client |
+| Visual direction: sprite pipeline (DESIGN.md), command bar, polish | client art/ | city client |
 
 Parallel lanes: Lane A: spikes -> server core -> session layer. Lane B: city client on recorded event fixtures (labeled simulated) once the event contract (D4) is frozen. Merge A+B, then visual direction.
 Conflict flags: event enum (server/client shared contract) is sequenced first and frozen at D4; SQLite schema owned by Lane A only.
@@ -747,7 +768,7 @@ REALITY: pr-count pass (no repo yet; default one PR per wave assumed, no split p
 | CEO Review | `/gstack-plan-ceo-review` | Scope & strategy | 0 | — | — |
 | Outside Review | Claude Code (Opus 5.5) via office-hours D3 + eng-review outside voice | Independent 2nd opinion | 2 | completed | office-hours: 3 reads; eng outside: C1, H1-H7, M1-M5, L1-L3 |
 | Eng Review | `/gstack-plan-eng-review` | Architecture & tests (required) | 1 | ISSUES OPEN | 9 issues, 0 critical gaps; all remedies decided D1-D18 |
-| Design Review | `/gstack-plan-design-review` | UI/UX gaps | 0 | — | visual direction open (moodboard) |
+| Design Review | `/gstack-plan-design-review` | UI/UX gaps | 0 | — | visual direction decided 2026-10-26 by /design-consultation (DESIGN.md); plan design review not run |
 | DX Review | `/gstack-plan-devex-review` | Developer experience gaps | 0 | — | — |
 
 - **OUTSIDE COVERAGE:** Claude Code (provider claude-code, model claude-opus-5-5), phases office-hours and plan-eng-review, completed. Codex Astra (gpt-6-astra) and in-host reads also completed in office-hours. Eng outside prompt truncated the plan at 30KB (noted in review).

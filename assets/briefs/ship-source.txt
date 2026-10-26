@@ -1,0 +1,27 @@
+Use your built-in image generation tool to create exactly one image. Do not write code, do not draw with code, and do not edit any files. Generate the image once and reply with one line describing it.
+
+Two reference images are attached: a sheet of buildings and a sheet of terrain tiles from the same game. Match their art style, lighting, camera angle and scale exactly. A cottage in your image must be the same size, relative to the sheet, as the red-roofed cottage in the attached buildings sheet.
+
+Create a new GAME SPRITE SHEET for the isometric island game Repo City. Landscape 3:2 image.
+
+Background: one perfectly flat, uniform pure magenta background (#FF00FF) across the whole image, no gradient, no floor, no shadows on the background.
+
+The big change from the reference: NO BASES. Each object stands directly on the magenta with nothing under it: no grass slab, no ground tile, no dirt, no water square, no cast shadow. The bottom of each building is just its own stone foundation or footing. Small bushes or trees may touch the walls but must not form a ground patch.
+
+Layout: 12 objects in a clean grid of 4 columns and 3 rows, each centered in its cell, wide magenta gaps, nothing touching. No labels, no text, no frames.
+
+Camera and light: identical to the references. Isometric view from the south-east, light from the upper left. Stylized low-poly 3D like the references.
+
+The 12 objects, in reading order:
+1. Keep: small stone castle with a tall tower and a blue banner.
+2. Sea gate: a tall stone gate arch with a lit beacon brazier on top and a lantern, standing on its own stone footing (no pier, no water).
+3. Silos: two round stone silos with conical roofs beside a wooden warehouse with a big lit door.
+4. Lighthouse: tall white-and-red striped lighthouse with a glowing lamp.
+5. Cottage with a red tile roof and warm lit windows.
+6. Cottage with a slate-grey roof and dark windows.
+7. Market: three stalls with striped awnings.
+8. Container stack with a small crane.
+9. Ruin: abandoned house, collapsed roof, cracked grey walls, ivy, no lights, clearly unused.
+10. Ship: small sailing ship with one bright orange sail, hull only, no water around it.
+11. Two pennant poles, one green and one red, on a tiny stone footing.
+12. Construction: a red-roofed cottage half-built inside wooden scaffolding, with a ladder and a few planks (an agent is working here).

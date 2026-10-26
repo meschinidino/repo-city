@@ -1,0 +1,31 @@
+Use your built-in image generation tool to create exactly one image. Do not write code, do not draw with code, and do not edit any files. Generate the image once and reply with one line describing it.
+
+Two reference images are attached: a buildings sheet and a terrain tile sheet from the same game. Match their art style, materials, lighting (from the upper left), camera (isometric from the south-east, 2:1 ground angle) and scale.
+
+Create a GAME SPRITE SHEET for the isometric island game Repo City. Landscape 3:2 image.
+
+Background: one perfectly flat, uniform pure magenta (#FF00FF) everywhere, no gradient, no ground, no shadows on the background.
+
+FOOTPRINT PLATES (most important rule): every building stands on a perfectly flat, uniform, pure cyan (#00FFFF) isometric plate that marks its exact footprint on the ground. The plate is a flat diamond (or a flat parallelogram for 2x1) with sharp straight edges, no texture, no shading, no shadow, no grass on it. The whole building, including its foundation, porch, stairs, bushes and props, must fit completely inside the plate, so a thin strip of cyan stays visible all around the front of the building. Nothing may stick out past the plate's edges. One plate tile has the same size as one terrain tile in the attached terrain sheet.
+
+Plate sizes:
+- 1x1 tile: sea gate, lighthouse, both cottages, containers, ruin, flags, construction.
+- 2x2 tiles: keep, silos.
+- 2x1 tiles (long along the lower-right direction): market.
+
+NO PEOPLE anywhere: no workers, no figures, no animals.
+
+Layout: 11 objects in a clean grid of 4 columns and 3 rows (the last cell stays empty magenta), each centered in its cell, wide magenta gaps between objects, nothing touching. No labels, no text, no frames.
+
+The 11 objects, in reading order:
+1. Keep (2x2): small stone castle with a tall central tower and a blue banner. The island's landmark, clearly the most important building.
+2. Sea gate (1x1): tall stone gate arch with a lit beacon brazier on top and a lantern.
+3. Silos (2x2): two round stone silos with conical roofs beside a wooden warehouse with a big lit door.
+4. Lighthouse (1x1): tall white-and-red striped lighthouse with a glowing lamp.
+5. Cottage (1x1): red tile roof, warm lit windows.
+6. Cottage (1x1): slate-grey roof, dark windows.
+7. Market (2x1): three stalls with blue, red and green striped awnings in a row.
+8. Containers (1x1): a stack of colorful shipping containers with a small crane.
+9. Ruin (1x1): abandoned house, collapsed roof, cracked grey walls, ivy, no lights, clearly unused.
+10. Flags (1x1): two pennant poles, one green and one red.
+11. Construction (1x1): a red-roofed cottage half-built inside wooden scaffolding with a ladder and planks. No people.

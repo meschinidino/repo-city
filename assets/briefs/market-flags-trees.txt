@@ -1,0 +1,27 @@
+Use your built-in image generation tool to create exactly one image. Do not write code, do not draw with code, and do not edit any files. Generate the image once and reply with one line describing it.
+
+The attached reference is a sprite sheet from the same game. Match its art style, materials, lighting (from the upper left), camera (isometric from the south-east, 2:1 ground angle), the cyan footprint plates, and the scale: one plate tile is the same size as the 1x1 plates in the reference (for example under the cottages).
+
+Create a GAME SPRITE SHEET for the isometric island game Repo City. Landscape 3:2 image.
+
+Background: one perfectly flat, uniform pure magenta (#FF00FF) everywhere, no gradient, no ground, no shadows on the background.
+
+FOOTPRINT PLATES: every object stands on a perfectly flat, uniform, pure cyan (#00FFFF) isometric plate with sharp straight edges, no texture, no shading, no shadow, no grass. The plate's size must be exact: a 1x1 plate is a diamond exactly as wide as the reference's 1x1 plates; a 2x1 plate is exactly twice as long as it is wide; a 3x1 plate is exactly three times as long as it is wide. Long plates run along the lower-right direction. The whole object, including trunks, roots, footings and props, sits completely inside the plate with a clear strip of cyan visible all around its base. Nothing touches or crosses the plate edge at ground level.
+
+NO PEOPLE, no animals.
+
+Layout: 12 objects in a clean grid of 4 columns and 3 rows, each centered in its cell, wide magenta gaps, nothing touching. No labels, no text, no frames.
+
+The 12 objects, in reading order:
+1. Market (2x1 plate, exactly twice as long as wide): two market stalls with blue and red striped awnings, crates of produce.
+2. Market (3x1 plate, exactly three times as long as wide): three stalls with blue, red and green striped awnings in a row.
+3. Flags (1x1 plate): two pennant poles, one green and one red, each on a small square stone footing; both footings sit near the middle of the plate, well inside its edges.
+4. One tall pine tree (1x1).
+5. One round broad-leaf tree (1x1).
+6. A cluster of three small pine trees (1x1).
+7. Two low round bushes with a few small rocks (1x1).
+8. One birch tree with a white trunk (1x1).
+9. A tall slim cypress tree (1x1).
+10. A small autumn tree with orange leaves (1x1).
+11. A flowering bush with pink blossoms (1x1).
+12. A mossy boulder with one small young tree beside it (1x1).

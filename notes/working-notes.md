@@ -10,13 +10,22 @@ Everything needed to work on this project, in one place. If a note here conflict
 | Test plan (5 E2E journeys, edge cases, critical paths) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-eng-review-test-plan-20261026-160000.md` | [specs/test-plan.md](../specs/test-plan.md) |
 | Machine-readable tasks | `~/.gstack/projects/meta-hackathon/tasks-eng-review-20261026-163341.jsonl` | [specs/tasks.jsonl](../specs/tasks.jsonl) |
 | Hackathon rules | [specs/hackathon-rules.md](../specs/hackathon-rules.md) | same |
-| Design mockups (all rejected) | `~/.gstack/projects/meta-hackathon/designs/mockup-20261026/` (variant-A/B/C.png, board at http://127.0.0.1:54643/boards/b-20261026-180732-2wue7e/ — local only, may be down) | not copied |
+| Visual design system (archipelago, building types, tokens, sprite pipeline rules) | [DESIGN.md](../DESIGN.md) | same |
+| Round-1 mockups (all rejected) | `~/.gstack/projects/meta-hackathon/designs/mockup-20261026/` (variant-A/B/C.png) | not copied |
+| Archipelago concepts (Codex vs Muse) | `~/.gstack/projects/meta-hackathon/designs/archipelago-20261026/`; board with votes: https://claude.ai/artifact/MFR5D645P8mLhdiiXXzYNQ | not copied |
+| Sprite sheets in use and their Codex briefs | `~/.gstack/projects/meta-hackathon/designs/sprites-20261026/` holds every round (the rejected ones too) | [assets/sprites/](../assets/sprites/), [assets/briefs/](../assets/briefs/) — the repo copies are what the build uses |
+| Concept art (approved, low-poly) | `~/.gstack/projects/meta-hackathon/designs/archipelago-20261026/codex/` | [docs/design/concepts/](../docs/design/concepts/) |
+| Sprite pipeline prototype | — | [prototype/sprite-spike/](../prototype/sprite-spike/) |
+| Roadmap, changelog, version | — | [ROADMAP.md](../ROADMAP.md), [CHANGELOG.md](../CHANGELOG.md), [VERSION](../VERSION) |
+| Moodboard v2 with votes | https://claude.ai/artifact/CFEghD36uSQxc51eoadZrE (private; reference screenshots are internal only) | not copied |
+| Sprite spike with live checks | https://claude.ai/artifact/LBVcGZJPPyKJfaCbiHBxWB (private) | not copied |
 
 **Sync rule:** when the `~/.gstack` design doc changes, re-copy it to `specs/design.md` in the same commit. The gstack skills read the `~/.gstack` copy; humans and judges read the repo copy.
 
 ## Binding decisions (index; full text in the design doc ledger)
 
-- Approach B: isometric city. Node.js backend **rejected** by the user. **One Rust binary (Axum) serving a PixiJS/TypeScript client.** Tauri rejected.
+- **Visual direction (2026-10-26): low-poly quest archipelago** — modules are islands, imports are bridges, agents are ships, a bottom command bar with a quest log is the only panel. Codex image generation makes the art; sprites are placed by measured footprint plates on a grid-fitted tile set with an occupancy grid. Full rules in [DESIGN.md](../DESIGN.md).
+- Approach B: isometric city (rendered as the archipelago above). Node.js backend **rejected** by the user. **One Rust binary (Axum) serving a PixiJS/TypeScript client.** Tauri rejected.
 - TS/JS extraction in Rust with **Oxc** (`oxc_parser`, `oxc_resolver`). dependency-cruiser/ts-morph are out with Node.
 - SQLite via **rusqlite**: session state, append-only event log (per-session sequence), extraction cache keyed by file content hash.
 - One **normalized event enum** in Rust. Adapters: **Claude Code CLI primary, Codex CLI fallback.** Adapter pass bar: ≥80% of file changes mapped to a building, 100% of session/test outcomes mapped (watcher is the denominator).
@@ -33,7 +42,7 @@ Everything needed to work on this project, in one place. If a note here conflict
 1. **T1 — Meta AI tooling rule check, before any adapter code.** Read the Official Rules (accept in portal first), confirm what counts for the 25% criterion, which models qualify, and how Llama/Meta models are accessed. Ambiguity → Discord #office-hours. Llama must be visibly load-bearing in the demo: English reports, drag-connect task text, edge labels.
 2. **Day-1 spikes** (one named owner each): Oxc extraction on the real repo (count unresolved imports), CLI event stream (both adapters, thresholds above), permission bridge (Claude permission modes/tool lists/prompt tool; Codex sandbox/approval modes — map each safety rule, downgrade any claim that cannot be enforced).
 3. **Day-3 kill gate (narrowed):** directory districts only, one session, one repo, worker moves on real file events, English report lands. Roads may be partial. If it fails: cut visual fidelity, never the control loop or drag.
-4. **Moodboard gate:** visual direction is **undecided**. User supplies a moodboard; only then are new mockups generated. Three prior directions (Factorio Dusk, Clean SimCity, Night Grid) were all rejected and logged as taste rejections. Do not regenerate blind.
+4. **Moodboard gate: passed 2026-10-26.** Moodboard v2 votes → quest archipelago → Codex over Muse for art → low-poly → four sprite spike rounds. See DESIGN.md. Still open: command bar and report card mockups; tile edge error is 1.39% against a 1% target.
 5. **Submission gate:** CV platform entry with all teammates, 3-minute video, this public repo verified logged-out, all before **Nov 4, 9:00 PM ET**.
 
 ## Unverified premises (resolve at kickoff)
@@ -44,7 +53,7 @@ Everything needed to work on this project, in one place. If a note here conflict
 
 ## The assignment (before building the renderer)
 
-Collect a 10-image moodboard and get the vibe-coder friend's real repo. Paper-test the 3-minute story on him: open his repo, name three districts, narrate one agent task and its English report. He must retell what the repo does in 20 seconds. If he cannot, the district model is wrong, not the art.
+Moodboard: done (2026-10-26). Still to do: get the vibe-coder friend's real repo. Paper-test the 3-minute story on him: open his repo, name three districts, narrate one agent task and its English report. He must retell what the repo does in 20 seconds. If he cannot, the district model is wrong, not the art.
 
 ## Tools and access already verified (2026-10-26)
 
@@ -69,6 +78,6 @@ Test stack (approved): cargo test (Rust), Vitest (client logic), Playwright (the
 ## Open questions carried in the design doc
 
 - Exact Meta AI tooling requirement (gate 1 answers this).
-- Visual direction (moodboard gate).
+- Command bar, quest log and report card visuals (direction decided, not mocked yet).
 - Whether Louvain refinement passes the naming test (day-1 spike).
 - Demo-repo test-command source if none of `package.json`/justfile/Makefile exists (shows as "not run" per D15).

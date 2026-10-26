@@ -1,0 +1,16 @@
+Use your built-in image generation tool to create exactly one image. Do not write code, do not draw with code, and do not edit any files. Generate the image once and reply with one line describing it.
+
+Two reference images are attached from the same game: a buildings sheet and a terrain tile sheet. Match the terrain sheet exactly: the same block size, the same grass, the same earth-and-rock sides, the same low-poly style, the same camera (isometric from the south-east) and light (upper left).
+
+Create a COAST TILE SHEET for the isometric island game Repo City. Landscape 3:2 image. Background: one perfectly flat, uniform pure magenta (#FF00FF), no gradient, no shadows on the background.
+
+Every tile is one isometric diamond block of grass, exactly like the plain grass tile in the reference, with the same thickness. The only difference between tiles is where a strip of sandy beach with a little white foam runs along the edge of the top face. The beach strip is narrow (about one fifth of the tile) and sits on the grass top along the named edge. No water on the tile itself.
+
+The top face of each tile is a diamond with four edges: the upper-left edge, the upper-right edge, the lower-right edge and the lower-left edge.
+
+Layout: 12 tiles in a grid of 4 columns and 3 rows, centered in cells, wide magenta gaps, nothing touching, no labels or text.
+
+The 12 tiles, in reading order:
+Row 1 (one edge each): 1. beach along the upper-left edge only. 2. beach along the upper-right edge only. 3. beach along the lower-right edge only. 4. beach along the lower-left edge only.
+Row 2 (two edges, outer corners): 5. beach along upper-left and upper-right edges. 6. beach along upper-right and lower-right edges. 7. beach along lower-right and lower-left edges. 8. beach along lower-left and upper-left edges.
+Row 3: 9. beach along all four edges (a tiny islet). 10. plain grass, no beach. 11. beach along the upper-left, upper-right and lower-right edges. 12. beach along the lower-right, lower-left and upper-left edges.
