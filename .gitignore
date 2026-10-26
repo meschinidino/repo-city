@@ -1,0 +1,10 @@
+.gstack/
+generated_images/
+.DS_Store
+target/
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example

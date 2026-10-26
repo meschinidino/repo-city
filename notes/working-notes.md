@@ -1,0 +1,74 @@
+# Working notes — Repo City
+
+Everything needed to work on this project, in one place. If a note here conflicts with [specs/design.md](../specs/design.md), the design doc wins until it is edited. Chat language for this project: **English** (the hackathon is delivered in English).
+
+## Where the plan lives
+
+| What | Canonical location | Repo copy |
+|---|---|---|
+| Approved design doc (problem, premises, approaches, committed contracts, D1–D18 decision ledger, implementation tasks T1–T10, GSTACK REVIEW REPORT) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-design-20261026-151207.md` (Status: APPROVED) | [specs/design.md](../specs/design.md) |
+| Test plan (5 E2E journeys, edge cases, critical paths) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-eng-review-test-plan-20261026-160000.md` | [specs/test-plan.md](../specs/test-plan.md) |
+| Machine-readable tasks | `~/.gstack/projects/meta-hackathon/tasks-eng-review-20261026-163341.jsonl` | [specs/tasks.jsonl](../specs/tasks.jsonl) |
+| Hackathon rules | [specs/hackathon-rules.md](../specs/hackathon-rules.md) | same |
+| Design mockups (all rejected) | `~/.gstack/projects/meta-hackathon/designs/mockup-20261026/` (variant-A/B/C.png, board at http://127.0.0.1:54643/boards/b-20261026-180732-2wue7e/ — local only, may be down) | not copied |
+
+**Sync rule:** when the `~/.gstack` design doc changes, re-copy it to `specs/design.md` in the same commit. The gstack skills read the `~/.gstack` copy; humans and judges read the repo copy.
+
+## Binding decisions (index; full text in the design doc ledger)
+
+- Approach B: isometric city. Node.js backend **rejected** by the user. **One Rust binary (Axum) serving a PixiJS/TypeScript client.** Tauri rejected.
+- TS/JS extraction in Rust with **Oxc** (`oxc_parser`, `oxc_resolver`). dependency-cruiser/ts-morph are out with Node.
+- SQLite via **rusqlite**: session state, append-only event log (per-session sequence), extraction cache keyed by file content hash.
+- One **normalized event enum** in Rust. Adapters: **Claude Code CLI primary, Codex CLI fallback.** Adapter pass bar: ≥80% of file changes mapped to a building, 100% of session/test outcomes mapped (watcher is the denominator).
+- **Filesystem watcher (`notify`) + `git status`** is ground truth for file-touched. CLI events carry intent/narration only.
+- Districts are **directory-first**. Louvain clustering is a candidate refinement only, shipped only if it produces nameable districts on the real demo repo.
+- **District lock:** a second session on a busy district is refused or queued, naming the busy session. Same-file overlap marker is the backstop.
+- **Drag-connect is never-cut.** Cut order: polish → pause/resume → Louvain → overlap marker. Never cut: real event mapping, finish flow, failure states, English reports, drag.
+- Pause = **stop + resume by stored session id** (`claude --resume <id>`, verified in the installed CLI). No process suspension.
+- Accept is **guarded**: dirty main checkout refuses, target branch shown, test command discovered (`package.json` scripts → justfile → Makefile) and shown before running, checks re-run after every merge.
+- Demo video: one live rehearsed task; sped-up/cut segments **labeled on screen**; nothing simulated is presented as live. Same rule inside tests: recorded CLI fixtures are labeled simulated and prove translation only.
+
+## Gates, in order
+
+1. **T1 — Meta AI tooling rule check, before any adapter code.** Read the Official Rules (accept in portal first), confirm what counts for the 25% criterion, which models qualify, and how Llama/Meta models are accessed. Ambiguity → Discord #office-hours. Llama must be visibly load-bearing in the demo: English reports, drag-connect task text, edge labels.
+2. **Day-1 spikes** (one named owner each): Oxc extraction on the real repo (count unresolved imports), CLI event stream (both adapters, thresholds above), permission bridge (Claude permission modes/tool lists/prompt tool; Codex sandbox/approval modes — map each safety rule, downgrade any claim that cannot be enforced).
+3. **Day-3 kill gate (narrowed):** directory districts only, one session, one repo, worker moves on real file events, English report lands. Roads may be partial. If it fails: cut visual fidelity, never the control loop or drag.
+4. **Moodboard gate:** visual direction is **undecided**. User supplies a moodboard; only then are new mockups generated. Three prior directions (Factorio Dusk, Clean SimCity, Night Grid) were all rejected and logged as taste rejections. Do not regenerate blind.
+5. **Submission gate:** CV platform entry with all teammates, 3-minute video, this public repo verified logged-out, all before **Nov 4, 9:00 PM ET**.
+
+## Unverified premises (resolve at kickoff)
+
+- Friend's demo repo: language (assumed TS/JS), size, install size/time. Getting this repo is part of the assignment below. Fallback: a prepared TS/JS monorepo fixture.
+- Team size/capacity ("small team up to 4" is unconfirmed). Spike owners in gate 2 force this answer.
+- Render scale at ~2,000 buildings (60 fps, <500 MB app-only on the demo machine) — measured at the day-3 gate (task T9), not before.
+
+## The assignment (before building the renderer)
+
+Collect a 10-image moodboard and get the vibe-coder friend's real repo. Paper-test the 3-minute story on him: open his repo, name three districts, narrate one agent task and its English report. He must retell what the repo does in 20 seconds. If he cannot, the district model is wrong, not the art.
+
+## Tools and access already verified (2026-10-26)
+
+- Claude Code CLI 2.1.293 at `~/.local/bin/claude` (user subscription). Verified flags: `-p --output-format stream-json`, `--resume <id>`, `--permission-mode`, `--allowedTools/--disallowedTools`, `--permission-prompt-tool`. Model used for second opinions: `claude-opus-5-5`.
+- Codex CLI 0.160.0 at `/opt/homebrew/bin/codex` (user subscription). Verified: `codex exec --json`, `--skip-git-repo-check`, `-s/--sandbox`, approval routing. Model: `gpt-6-astra` (from `~/.codex/config.toml`).
+- GitHub CLI logged in as `meschinidino` (repo scope, SSH protocol).
+- Model credits/partners from the event page: Baseten $100, Modal $100, Fireworks $25 (select participants). Check #resources on Discord for credit forms.
+- Second opinions on record (in the design doc): Claude Opus 5.5, Codex Astra, in-host agent. Do not re-run for settled questions.
+
+## Implementation tasks (summary; full text in design doc)
+
+T1 Meta rule check · T2 Oxc extraction with counts · T3 normalized events + adapters under thresholds · T4 watcher ground truth · T5 worktree lifecycle + district locks + shared read-only deps + SQLite · T6 guarded finish flow · T7 Pixi city · T8 permission bridge + secret redaction (planted-secret test) · T9 cache + render budget · T10 one-command run from a clean clone.
+
+Test stack (approved): cargo test (Rust), Vitest (client logic), Playwright (the 5 E2E journeys), eval harness for Llama naming/report quality on pinned fixtures. User standard: useful coverage and branch tests, meaningful E2E — not percentage for its own sake.
+
+## Honesty rules (standing, from the user)
+
+- Never claim "verified" or "works end to end" if any part was simulated (mocks, fixtures, stubs). Label simulated evidence as simulated, up front.
+- If something from the backend or environment is missing, stop and report it as a blocker: what is missing and what the user must do.
+- Separate "tested with simulation" from "tested end to end" in every report.
+
+## Open questions carried in the design doc
+
+- Exact Meta AI tooling requirement (gate 1 answers this).
+- Visual direction (moodboard gate).
+- Whether Louvain refinement passes the naming test (day-1 spike).
+- Demo-repo test-command source if none of `package.json`/justfile/Makefile exists (shows as "not run" per D15).
