@@ -634,7 +634,22 @@ Actual answer: prior approvals — safety model, honesty criterion, Distribution
 Accepted scope: as listed per item
 History: none
 
-Approval readiness: PASS — R1 (D3), R2 (D4), R3 (D5), R4 (D6), R5 (D7), R6 (D8), R7 (D9), R8 (D10), R9 (D11), R10 (D12), R11 (D13), R12 (D14), R13 (D15), R14 (D16), R15 (D17), R16 (D18), R17 (prior approvals). Scope structure: D1 rejected, D2 A approved (Rust binary + web client, Node rejected).
+### R18: Visual direction (design-consultation, 2026-10-26)
+Finding: moodboard gate (working notes gate 4, reviewer concern R2-4); visual direction and placeholder art were open
+Plan baseline: "Visual direction is NOT settled"; three first-round mockups rejected; no placeholder-art rule
+Runtime evidence: moodboard v2 votes (34 references, 10 building types, one general note) read from the voting page; concept board votes (8 images, Codex vs Muse); four sprite spike rounds with live geometry checks (https://claude.ai/artifact/LBVcGZJPPyKJfaCbiHBxWB)
+Decisions, each answered by the user in session:
+- D19 Metaphor: quest archipelago. Modules are islands, imports are bridges, sessions are ships, a lane on the water is a route being built. Source: moodboard keeps (Monument Valley 2 islands, Dorfromantik board, Timberborn) and the user's note ("ports and an ocean could be clear too"; "king could make quests").
+- D20 Command center: one bottom command bar with a token per agent and a quest log for create/pause/resume/stop/archive/follow-up; no top bar, sidebar or chat box. Source: user note ("we need a command center … being able to list them and CRUD them"; on the side panel reference: "Bar could be it").
+- D21 Building types by what a file does (keep, sea gate, silos, lighthouse, market, containers, ruin, cottage, construction); tests as pennants, config and types folded into cottages. Source: user ("Why would a file that does nothing look just like the one that holds exposed endpoints"); lab, substation and foundation types voted out.
+- D22 Art: Codex image generation, stylized low-poly. Source: concept board pick (generator: Codex; "Muse was smarter but had worse taste. Codex has incredible taste."); style switched from pixel art to low-poly by the user at the sprite spike.
+- D23 Placement by rule, not by eye: buildings on cyan footprint plates inside their tiles, tiles fitted to the exact grid, an occupancy grid with one free cell and reserved bridge landings, bridges drawn in code, checks at load. Source: user after round 2 ("rules such as the base of the building has to be inside a tile … make squares for tiles so tiles are aligned").
+State: approved
+Actual answer: D19–D23 as listed — design-consultation, 2026-10-26
+Accepted scope: DESIGN.md is the visual source of truth; sprites and briefs in assets/; reference implementation in prototype/sprite-spike/. Contracts in this document keep their wording and map through the Visual Direction section. Muse's role beyond art, and the command bar / report card visuals, remain open.
+History: first-round mockups rejected (Factorio Dusk, Clean SimCity, Night Grid); second-round directions (Maquette, Working Atlas, Transit model) judged not ambitious enough
+
+Approval readiness: PASS — R1 (D3), R2 (D4), R3 (D5), R4 (D6), R5 (D7), R6 (D8), R7 (D9), R8 (D10), R9 (D11), R10 (D12), R11 (D13), R12 (D14), R13 (D15), R14 (D16), R15 (D17), R16 (D18), R17 (prior approvals), R18 (D19–D23). Scope structure: D1 rejected, D2 A approved (Rust binary + web client, Node rejected).
 
 ## NOT in scope
 - Approach C: footprint prediction, spatial collision forecasting, translucent future preview. Out of submission scope (office-hours Scope decision). Real-event overlap (D16) and district locks (D17) are the MVP substitute.
@@ -647,6 +662,7 @@ Approval readiness: PASS — R1 (D3), R2 (D4), R3 (D5), R4 (D6), R5 (D7), R6 (D8
 - Git worktrees (built into git) for per-session isolation, the Conductor/Claude Squad pattern.
 - Libraries to adopt, not write: Axum (HTTP/WebSocket), rusqlite, notify (filesystem watcher), Oxc parser/resolver (TS/JS extraction in Rust), graphology/Louvain equivalent in Rust only if the candidate refinement passes, PixiJS (client rendering).
 - Nothing in the workspace exists yet: no git repo, no code, no tests. Framework detection found no package.json, Cargo.toml, or test runner.
+- Since 2026-10-26 (v0.1.0): DESIGN.md, the sprite sheets and Codex briefs in assets/, and a single-page reference implementation of the sprite pipeline with its geometry checks in prototype/sprite-spike/. Still no application code.
 
 ## Diagrams
 
@@ -655,11 +671,11 @@ Repo open and live loop (proposed):
 User opens repo
   -> Rust: walk files, Oxc parse imports, directory-first districts
   -> SQLite cache (content hash): hit = reuse layout+naming, miss = parse + Llama name
-  -> Pixi client renders frozen city (districts, buildings, roads)
+  -> Pixi client renders frozen city (districts, buildings, roads), drawn as islands, typed buildings and bridges by the sprite pipeline (DESIGN.md, D23)
 User starts session on a district (district lock, D17)
   -> worktree + branch -> spawn CLI (normalized events, D4)
   -> notify watcher + git status = file-touched ground truth (D8)
-  -> worker moves to building; unmappable = district gate, "location unknown"
+  -> worker moves to building (the ship docks, windows light on the touched building); unmappable = district gate, "location unknown"
   -> session finishes -> Llama English report from real diff (template fallback)
   -> Accept (guarded merge, D15) | Discard | Keep for later
 Drag district A -> district B
@@ -722,8 +738,8 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Outside Voice M2 / R13 (D15)
   - Files: server/src/finish/, client report card
   - Verify: Playwright E2E accept/conflict/discard on a fixture repo
-- [ ] **T7 (P1, human: ~3d / CC: ~4h)** — Client — Pixi isometric city: frozen layout, worker on real events, drag-connect with confirmation and cycle refusal, report cards, failure markers
-  - Surfaced by: Premises 1-3, R7 never-cut (D9), R14 (D16)
+- [ ] **T7 (P1, human: ~3d / CC: ~4h)** — Client — Pixi isometric archipelago: frozen layout of islands and bridges, ship and lit windows on real events, drag-connect lanes with confirmation and cycle refusal, report cards, failure markers (pennants, stalled ship, location unknown)
+  - Surfaced by: Premises 1-3, R7 never-cut (D9), R14 (D16), R18 (D19, D21)
   - Files: client/src/
   - Verify: Vitest state tests; Playwright journeys (open, session, drag, failures)
 - [ ] **T8 (P1, human: ~1d / CC: ~1h)** — Safety — Permission bridge mapping per CLI; unenforceable safety rules restated; secret redaction (env-value matching) with planted-secret test
@@ -738,6 +754,14 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Outside Voice L3, Distribution Plan
   - Files: justfile or scripts/, README.md
   - Verify: clean-clone run in a logged-out environment reaches the city
+- [ ] **T11 (P1, human: ~1.5d / CC: ~2h)** — Sprite pipeline — Port prototype/sprite-spike/ into a client module: magenta and plate keying, cut-out by shape, plate measurement and footprint choice, tile fitting, coast autotiling, occupancy layout with trees, code-drawn bridges and lanes; the geometry checks run at load and fail the build at fail level; bring tile edge error under 1%; building type from the Oxc parse (Llama for unclear files)
+  - Surfaced by: R18 (D21, D22, D23)
+  - Files: client/src/map/, assets/sprites/
+  - Verify: Vitest on each pipeline step against the committed sheets (counts, plate ratios, overlaps 0, gaps, hidden share); Playwright screenshot at full size reviewed by eye
+- [ ] **T12 (P1, human: ~1.5d / CC: ~2h)** — Command bar — Mock, then build, the bottom command bar (agent tokens), quest log (session CRUD and follow-ups) and report card against DESIGN.md, with empty, stalled, failed and report-unavailable states
+  - Surfaced by: R18 (D20), Session lifecycle and Finish flow contracts
+  - Files: client/src/ui/
+  - Verify: Vitest state tests per component state; Playwright journeys for create, pause, resume, stop, archive and Accept from the report card
 
 REALITY: premise-table pass (binding premises quoted from approved design; unverified=2: friend repo language/size, team capacity) dinomeschini-unknown-design-20261026-151207.md:65-68
 REALITY: already-done pass (no git repo exists; nothing built or merged) dinomeschini-unknown-design-20261026-151207.md:5

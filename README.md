@@ -8,7 +8,7 @@ This is not a dashboard. It is a game-like world you operate: the map is the int
 
 ## Status
 
-Version 0.1.0. Design phase complete and approved; visual direction and sprite pipeline locked on 2026-10-26 (roadmap step 1). No application code yet.
+Version 0.1.1. Design phase complete and approved; visual direction and sprite pipeline locked on 2026-10-26 (roadmap step 1). No application code yet.
 
 - Roadmap: [ROADMAP.md](ROADMAP.md) · Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Visual design system — the archipelago, building types, colors, type, and the sprite pipeline rules: [DESIGN.md](DESIGN.md)

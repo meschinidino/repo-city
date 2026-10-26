@@ -1,6 +1,6 @@
 # Roadmap
 
-From the approved design ([specs/design.md](specs/design.md)): its Next Steps, the ten-day plan, gates and tasks T1–T10, in order. Submission is due **Nov 4, 9:00 PM ET**. Cut order if late: polish → pause/resume → Louvain → overlap marker. Never cut: real event mapping, finish flow, failure states, English reports, drag-connect.
+From the approved design ([specs/design.md](specs/design.md)): its Next Steps, the ten-day plan, gates and tasks T1–T12, in order. Submission is due **Nov 4, 9:00 PM ET**. Cut order if late: polish → pause/resume → Louvain → overlap marker. Never cut: real event mapping, finish flow, failure states, English reports, drag-connect.
 
 ## 1. Visual direction and sprite pipeline — done (v0.1.0, 2026-10-26)
 
@@ -21,13 +21,14 @@ From the approved design ([specs/design.md](specs/design.md)): its Next Steps, t
 
 - Axum server, SQLite store, WebSocket event stream.
 - T4: filesystem watcher plus `git status` as ground truth for file touches.
-- T7, first slice: the Pixi client renders islands from the extraction with the sprite pipeline from step 1 (checks run at load), a ship sails on session start, windows light on file touches, scaffolding on the building being edited.
+- T11: port the sprite pipeline from step 1 into the client; its geometry checks become tests and run at load; tile edge error under 1%; building type from the Oxc parse.
+- T7, first slice: the Pixi client renders islands from the extraction with that pipeline, a ship sails on session start, windows light on file touches, scaffolding on the building being edited.
 - English report from the real diff when a session ends.
 - Gate: one repo, one session, directory islands, the ship and lights move only on real events, and the report lands. If it fails, cut visual fidelity, never the control loop.
 
 ## 4. Quests and the command bar (session CRUD)
 
-- Mock the command bar, quest log and report card against DESIGN.md, then build them.
+- T12: mock the command bar, quest log and report card against DESIGN.md, then build them with their empty, stalled, failed and report-unavailable states.
 - T5: worktree per session; create, pause (stop plus resume by session id), stop, archive; island locks; shared read-only dependencies.
 - Quests in plain English, with the target island and model chosen at creation.
 
@@ -44,7 +45,7 @@ From the approved design ([specs/design.md](specs/design.md)): its Next Steps, t
 
 - Same-file overlap marker (the backstop behind island locks).
 - T9: extraction and naming cache by content hash; the render budget checked at about 2,000 files (60 fps, under 500 MB).
-- Bring tile edge error under 1%; zoom levels (landmarks and housing mass at map zoom).
+- Zoom levels (landmarks and a housing mass at map zoom).
 
 ## 8. Polish, demo and submission
 

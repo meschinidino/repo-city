@@ -2,6 +2,17 @@
 
 All notable changes to Repo City. Versions follow the `VERSION` file.
 
+## [0.1.1] - 2026-10-26
+
+Planning docs brought in line with the visual direction. No application code yet.
+
+### Changed
+- `specs/design.md`: decision ledger entry R18 records the visual decisions D19–D23 (archipelago metaphor, command bar and quest log, building types by file role, Codex low-poly art, placement by rule), each with the user's own words as the source. New tasks T11 (port the sprite pipeline into the client, checks as tests, tile edge error under 1%) and T12 (mock, then build, the command bar, quest log and report card). T7, the live-loop diagram and "What already exists" updated for islands, ships and the v0.1.0 assets.
+- `specs/test-plan.md`: journeys and edge cases rewritten for islands, quests, the command bar and report cards; new critical paths for motion following events only, sprite pipeline geometry, and building-type classification (eval); pending decisions now name the unmocked UI and Muse's role.
+- `specs/tasks.jsonl`: T7 retitled; T11 and T12 added.
+- `ROADMAP.md`, `notes/working-notes.md`, `specs/README.md`: task and ledger ranges updated to T1–T12 and D1–D23; T11 placed in step 3 and T12 in step 4.
+- Canonical copies in `~/.gstack/projects/meta-hackathon/` updated first and re-copied, per the sync rule.
+
 ## [0.1.0] - 2026-10-26
 
 Roadmap step 1: visual direction and sprite pipeline. No application code yet.

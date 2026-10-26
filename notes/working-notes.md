@@ -6,7 +6,7 @@ Everything needed to work on this project, in one place. If a note here conflict
 
 | What | Canonical location | Repo copy |
 |---|---|---|
-| Approved design doc (problem, premises, approaches, committed contracts, D1–D18 decision ledger, implementation tasks T1–T10, GSTACK REVIEW REPORT) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-design-20261026-151207.md` (Status: APPROVED) | [specs/design.md](../specs/design.md) |
+| Approved design doc (problem, premises, approaches, visual direction, committed contracts, D1–D23 decision ledger, implementation tasks T1–T12, GSTACK REVIEW REPORT) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-design-20261026-151207.md` (Status: APPROVED) | [specs/design.md](../specs/design.md) |
 | Test plan (5 E2E journeys, edge cases, critical paths) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-eng-review-test-plan-20261026-160000.md` | [specs/test-plan.md](../specs/test-plan.md) |
 | Machine-readable tasks | `~/.gstack/projects/meta-hackathon/tasks-eng-review-20261026-163341.jsonl` | [specs/tasks.jsonl](../specs/tasks.jsonl) |
 | Hackathon rules | [specs/hackathon-rules.md](../specs/hackathon-rules.md) | same |
@@ -65,7 +65,7 @@ Moodboard: done (2026-10-26). Still to do: get the vibe-coder friend's real repo
 
 ## Implementation tasks (summary; full text in design doc)
 
-T1 Meta rule check · T2 Oxc extraction with counts · T3 normalized events + adapters under thresholds · T4 watcher ground truth · T5 worktree lifecycle + district locks + shared read-only deps + SQLite · T6 guarded finish flow · T7 Pixi city · T8 permission bridge + secret redaction (planted-secret test) · T9 cache + render budget · T10 one-command run from a clean clone.
+T1 Meta rule check · T2 Oxc extraction with counts · T3 normalized events + adapters under thresholds · T4 watcher ground truth · T5 worktree lifecycle + district locks + shared read-only deps + SQLite · T6 guarded finish flow · T7 Pixi archipelago · T8 permission bridge + secret redaction (planted-secret test) · T9 cache + render budget · T10 one-command run from a clean clone · T11 sprite pipeline in the client (checks as tests) · T12 command bar, quest log and report card.
 
 Test stack (approved): cargo test (Rust), Vitest (client logic), Playwright (the 5 E2E journeys), eval harness for Llama naming/report quality on pinned fixtures. User standard: useful coverage and branch tests, meaningful E2E — not percentage for its own sake.
 
