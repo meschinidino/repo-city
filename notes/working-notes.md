@@ -17,6 +17,7 @@ Everything needed to work on this project, in one place. If a note here conflict
 | Concept art (approved, low-poly) | `~/.gstack/projects/meta-hackathon/designs/archipelago-20261026/codex/` | [docs/design/concepts/](../docs/design/concepts/) |
 | Sprite pipeline prototype | — | [prototype/sprite-spike/](../prototype/sprite-spike/) |
 | Roadmap, changelog, version | — | [ROADMAP.md](../ROADMAP.md), [CHANGELOG.md](../CHANGELOG.md), [VERSION](../VERSION) |
+| Rules for coding agents (Muse Code reads it; CLAUDE.md points to it) | — | [AGENTS.md](../AGENTS.md) |
 | Moodboard v2 with votes | https://claude.ai/artifact/CFEghD36uSQxc51eoadZrE (private; reference screenshots are internal only) | not copied |
 | Sprite spike with live checks | https://claude.ai/artifact/LBVcGZJPPyKJfaCbiHBxWB (private) | not copied |
 

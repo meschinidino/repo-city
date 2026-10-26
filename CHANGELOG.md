@@ -2,6 +2,17 @@
 
 All notable changes to Repo City. Versions follow the `VERSION` file.
 
+## [0.1.2] - 2026-10-26
+
+Ready for handoff to another coding agent. No application code yet.
+
+### Added
+- `AGENTS.md`: shared rules for coding agents (Muse Code reads this file): what to read first, where to start (roadmap step 2, with T2 and T11 open before the T1 rule check and adapter work blocked until it), the honesty rules, design and sprite rules, docs sync, commands and git rules.
+
+### Changed
+- `CLAUDE.md` now points to `AGENTS.md` for the shared rules instead of repeating them, so both agents follow one file.
+- `README.md` and `notes/working-notes.md` link to `AGENTS.md`.
+
 ## [0.1.1] - 2026-10-26
 
 Planning docs brought in line with the visual direction. No application code yet.

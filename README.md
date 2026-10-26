@@ -8,9 +8,9 @@ This is not a dashboard. It is a game-like world you operate: the map is the int
 
 ## Status
 
-Version 0.1.1. Design phase complete and approved; visual direction and sprite pipeline locked on 2026-10-26 (roadmap step 1). No application code yet.
+Version 0.1.2. Design phase complete and approved; visual direction and sprite pipeline locked on 2026-10-26 (roadmap step 1). No application code yet.
 
-- Roadmap: [ROADMAP.md](ROADMAP.md) · Changelog: [CHANGELOG.md](CHANGELOG.md)
+- Roadmap: [ROADMAP.md](ROADMAP.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Rules for coding agents: [AGENTS.md](AGENTS.md)
 - Visual design system — the archipelago, building types, colors, type, and the sprite pipeline rules: [DESIGN.md](DESIGN.md)
 - Sprite sheets and their generation briefs: [assets/](assets/) · Concept art: [docs/design/concepts/](docs/design/concepts/)
 - Working pipeline prototype with live geometry checks: [prototype/sprite-spike/](prototype/sprite-spike/) (serve the repo root with `python3 -m http.server 8000`, then open `/prototype/sprite-spike/`)
