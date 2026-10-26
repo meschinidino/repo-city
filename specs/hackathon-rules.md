@@ -2,6 +2,24 @@
 
 Source: [Meta Global AI Developer Hackathon on Cerebral Valley](https://cerebralvalley.ai/e/meta-ai-developer-hackathon), fetched 2026-10-26, plus the kickoff slides provided by the participant (2026-10-26). Where a source is a slide, it says so.
 
+## Organizer-posted rules (Discord, Ivan, 2026-10-25 19:50)
+
+Posted by the organizers in the event Discord. "Read these before you build. Breaking them can disqualify your project."
+
+- **New work only.** Everything presented has to be built during the hackathon, Oct 26 to Nov 4.
+- **Identify your contributions.** The demo must show only features, code, and functionality the team built during the event. Judges need to be able to tell what is new. If they cannot, the project is disqualified.
+- **Public repo.** The submitted repository must be public.
+- **Teams.** Max 4 people, solo allowed. Pick one track (Indie Developer or Startup), enter the project in that track only. One person submits for the team.
+- **Demo video.** 3 minutes, required on the submission. One of the main things judges score.
+- **Banned projects.** Disqualified if they break legal, ethical, or platform policies, or use code, data, or assets you do not have the rights to. Also avoid generic projects: AI medical or health advice, basic RAG apps, simple image analyzers, "AI for education" chatbots, job application screeners, nutrition coaches, personality analyzers, sports analyzers or coaches.
+- **Theme.** The project must fit one of the two problem statements: Build for Your World, or Push the Frontier (use Muse Spark, Glimmer, SAM 3, or other Meta models on hard problems in software, robotics, manufacturing, energy, or science).
+- **Submit** by Wed Nov 4, 9:00 PM ET at https://cerebralvalley.ai/e/meta-ai-developer-hackathon/hackathon/submit — public repo, working demo video link, every team member added.
+- **Also in the waiver:** participants must be 18+ and of legal age where they live; Meta or CV staff, contractors, government-affiliated people, and their households cannot participate.
+
+Note the difference from the kickoff slides: this Discord list does not repeat "dashboards as the main feature" in its generic list (the slides do). Treat both lists as active; avoiding dashboards costs nothing.
+
+**Consequence for assets:** nothing here requires Muse-generated assets. The disqualification line is rights: code, data, or assets you do not have the rights to. Provenance logging (`assets/PROVENANCE.md`, planned) is the compliance mechanism.
+
 ## Status of the Official Rules
 
 The event page states: "Official Rules will be published before the Hackathon begins on October 26, 2026 and must be accepted by the selected participants." As of this fetch, the full official rules text is not on the public event page. **Action: accept the Official Rules in the portal and re-check this file against them before submitting.** Anything below that conflicts with the published Official Rules loses to the Official Rules.
