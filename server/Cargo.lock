@@ -986,6 +986,7 @@ dependencies = [
  "oxc_parser",
  "oxc_resolver",
  "oxc_span",
+ "rustpython-ast",
  "rustpython-parser",
  "serde",
  "serde_json",
