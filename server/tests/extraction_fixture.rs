@@ -1,0 +1,252 @@
+//! Tests against the stand-in fixture monorepo.
+//!
+//! The fixture is a stand-in, not the real demo repo. These tests prove
+//! extraction translation on hand-counted fixture values only.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use repo_city_server::extract::{extract_repo, Role};
+
+fn fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-monorepo")
+}
+
+fn file<'a>(
+    extraction: &'a repo_city_server::Extraction,
+    path: &str,
+) -> &'a repo_city_server::FileInfo {
+    extraction
+        .files
+        .iter()
+        .find(|f| f.path == path)
+        .unwrap_or_else(|| panic!("file not found in extraction: {path}"))
+}
+
+#[test]
+fn stand_in_fixture_counts_match_hand_count() {
+    let extraction = extract_repo(&fixture_root()).expect("extract stand-in fixture");
+
+    assert!(
+        extraction.is_stand_in_fixture,
+        "fixture must be labeled a stand-in"
+    );
+    assert_eq!(extraction.counts.files_parsed, 12);
+    assert_eq!(extraction.counts.files_with_parse_errors, 0);
+    assert_eq!(extraction.counts.total_imports, 16);
+    assert_eq!(extraction.counts.resolved_imports, 14);
+    assert_eq!(extraction.counts.unresolved_imports, 2);
+}
+
+#[test]
+fn stand_in_fixture_unresolved_are_listed() {
+    let extraction = extract_repo(&fixture_root()).expect("extract stand-in fixture");
+    let unresolved: Vec<(&str, &str)> = extraction
+        .unresolved
+        .iter()
+        .map(|u| (u.from_file.as_str(), u.specifier.as_str()))
+        .collect();
+    assert_eq!(
+        unresolved,
+        vec![
+            ("packages/api/src/broken.ts", "./does-not-exist"),
+            ("packages/api/src/broken.ts", "@fixture/ghost"),
+        ]
+    );
+}
+
+#[test]
+fn stand_in_fixture_islands_are_workspace_packages() {
+    let extraction = extract_repo(&fixture_root()).expect("extract stand-in fixture");
+    let ids: Vec<&str> = extraction.islands.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "@fixture/api",
+            "@fixture/cli",
+            "@fixture/shared",
+            "@fixture/web"
+        ]
+    );
+    let counts: BTreeMap<&str, usize> = extraction
+        .islands
+        .iter()
+        .map(|i| (i.id.as_str(), i.file_count))
+        .collect();
+    assert_eq!(counts["@fixture/shared"], 4);
+    assert_eq!(counts["@fixture/api"], 4);
+    assert_eq!(counts["@fixture/web"], 3);
+    assert_eq!(counts["@fixture/cli"], 1);
+}
+
+#[test]
+fn stand_in_fixture_bridges_are_counted_per_island_pair() {
+    let extraction = extract_repo(&fixture_root()).expect("extract stand-in fixture");
+    let bridges: BTreeMap<(&str, &str), usize> = extraction
+        .bridges
+        .iter()
+        .map(|b| ((b.from_island.as_str(), b.to_island.as_str()), b.count))
+        .collect();
+    assert_eq!(
+        bridges,
+        BTreeMap::from([
+            (("@fixture/api", "@fixture/shared"), 3),
+            (("@fixture/cli", "@fixture/api"), 1),
+            (("@fixture/cli", "@fixture/shared"), 1),
+            (("@fixture/web", "@fixture/shared"), 3),
+        ])
+    );
+}
+
+#[test]
+fn stand_in_fixture_roles_match_design_buildings() {
+    let extraction = extract_repo(&fixture_root()).expect("extract stand-in fixture");
+
+    let shared_entry = file(&extraction, "packages/shared/src/index.ts");
+    assert!(shared_entry.roles.contains(&Role::EntryPoint));
+    assert!(shared_entry.roles.contains(&Role::SharedUtility));
+    assert_eq!(shared_entry.building, "keep");
+    assert_eq!(shared_entry.importer_count, 7);
+
+    let route = file(&extraction, "packages/api/src/routes/users.ts");
+    assert!(route.roles.contains(&Role::ExposesEndpoints));
+    assert_eq!(route.building, "sea_gate");
+
+    let repo_file = file(&extraction, "packages/api/src/db/users-repo.ts");
+    assert!(repo_file.roles.contains(&Role::DataAccess));
+    assert_eq!(repo_file.building, "silos");
+    assert_eq!(repo_file.importer_count, 2);
+
+    let ui = file(&extraction, "packages/web/src/components/UserCard.tsx");
+    assert!(ui.roles.contains(&Role::UiComponent));
+    assert_eq!(ui.building, "market");
+
+    let generated = file(&extraction, "packages/web/src/generated/api-client.ts");
+    assert!(generated.roles.contains(&Role::Generated));
+    assert_eq!(generated.building, "containers");
+
+    let dead = file(&extraction, "packages/shared/src/dead.ts");
+    assert!(dead.roles.contains(&Role::DeadCode));
+    assert_eq!(dead.building, "ruin");
+    assert_eq!(dead.importer_count, 0);
+
+    // Entry points have no importers in the fixture but must not read as ruins.
+    for entry in [
+        "packages/api/src/index.ts",
+        "packages/web/src/main.tsx",
+        "packages/cli/src/index.ts",
+    ] {
+        let f = file(&extraction, entry);
+        assert!(
+            f.roles.contains(&Role::EntryPoint),
+            "{entry} should be an entry point"
+        );
+        assert!(
+            !f.roles.contains(&Role::DeadCode),
+            "{entry} must not be dead code"
+        );
+        assert_eq!(f.building, "keep");
+    }
+}
+
+#[test]
+fn stand_in_fixture_json_round_trip_for_client() {
+    let extraction = extract_repo(&fixture_root()).expect("extract stand-in fixture");
+    let json = repo_city_server::extract::to_json(&extraction, true).expect("serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("client-readable JSON");
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["is_stand_in_fixture"], true);
+    assert_eq!(value["counts"]["files_parsed"], 12);
+    assert_eq!(value["counts"]["resolved_imports"], 14);
+    assert_eq!(value["counts"]["unresolved_imports"], 2);
+    assert_eq!(value["unresolved"].as_array().map(Vec::len), Some(2));
+    assert!(value["islands"].as_array().is_some_and(|a| a.len() == 4));
+    assert!(value["bridges"].as_array().is_some_and(|a| a.len() == 4));
+}
+
+#[test]
+fn directory_first_fallback_without_workspace() {
+    let dir = std::env::temp_dir().join(format!("repo-city-dirs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("alpha")).expect("mkdir alpha");
+    std::fs::create_dir_all(dir.join("beta")).expect("mkdir beta");
+    std::fs::write(
+        dir.join("alpha/a.ts"),
+        "import { b } from '../beta/b';\nexport const a = b;\n",
+    )
+    .expect("write a");
+    std::fs::write(dir.join("beta/b.ts"), "export const b = 1;\n").expect("write b");
+    let extraction = extract_repo(&dir).expect("extract directory repo");
+    let ids: Vec<&str> = extraction.islands.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, vec!["alpha", "beta"]);
+    assert_eq!(extraction.counts.files_parsed, 2);
+    assert_eq!(extraction.counts.resolved_imports, 1);
+    assert_eq!(extraction.bridges.len(), 1);
+    assert_eq!(extraction.bridges[0].from_island, "alpha");
+    assert_eq!(extraction.bridges[0].to_island, "beta");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stand_in_single_package_python_and_feature_islands() {
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-single-package");
+    let extraction = extract_repo(&root).expect("extract single-package fixture");
+    assert!(extraction.is_stand_in_fixture);
+    assert_eq!(extraction.counts.files_parsed, 9);
+    assert_eq!(extraction.counts.total_imports, 8);
+
+    assert_eq!(extraction.counts.resolved_imports, 6);
+    assert_eq!(extraction.counts.unresolved_imports, 2);
+    let island_ids: Vec<&str> = extraction.islands.iter().map(|i| i.id.as_str()).collect();
+    assert!(
+        !island_ids.iter().any(|id| id.ends_with("__init__.py")),
+        "a package __init__ file must not become its own island: {island_ids:?}"
+    );
+    for expected in [
+        "backend/app/modules/orders",
+        "backend/app/modules/users",
+        "frontend/src/features/orders",
+        "frontend/src/features/users",
+    ] {
+        assert!(
+            island_ids.contains(&expected),
+            "missing island {expected}: {island_ids:?}"
+        );
+    }
+    let main = file(&extraction, "backend/app/main.py");
+    assert!(main.roles.contains(&Role::EntryPoint));
+    assert_eq!(main.building, "keep");
+    let router = file(&extraction, "backend/app/modules/users/router.py");
+    assert!(router.roles.contains(&Role::ExposesEndpoints));
+    assert_eq!(router.building, "sea_gate");
+    let repo_file = file(&extraction, "backend/app/modules/users/repository.py");
+    assert!(repo_file.roles.contains(&Role::DataAccess));
+    let bridges: BTreeMap<(&str, &str), usize> = extraction
+        .bridges
+        .iter()
+        .map(|b| ((b.from_island.as_str(), b.to_island.as_str()), b.count))
+        .collect();
+    assert_eq!(
+        bridges.get(&("backend/app/modules/orders", "backend/app/modules/users")),
+        Some(&1)
+    );
+    assert_eq!(
+        bridges.get(&(
+            "frontend/src/features/users",
+            "frontend/src/features/orders"
+        )),
+        Some(&1)
+    );
+}
+
+#[test]
+fn empty_repo_yields_zero_counts_not_a_panic() {
+    let dir = std::env::temp_dir().join(format!("repo-city-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let extraction = extract_repo(&dir).expect("extract empty repo");
+    assert_eq!(extraction.counts.files_parsed, 0);
+    assert_eq!(extraction.counts.total_imports, 0);
+    assert!(extraction.islands.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

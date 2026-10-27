@@ -1,0 +1,6 @@
+{
+  "name": "sample-monorepo-stand-in",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["packages/*"]
+}

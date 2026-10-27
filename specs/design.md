@@ -55,7 +55,7 @@ Approach B plus a plan layer: requested features appear as translucent buildings
 
 ## Recommended Approach
 
-Approach B, because the anti-dashboard rule and the lightweight-AAA premise are both existential. C's preview idea is explicitly out of submission scope. TS/JS monorepos first. One coding-agent CLI adapter first. Llama for district naming, narration, and diff-to-English reports, which is also the Meta AI tooling surface.
+Approach B, because the anti-dashboard rule and the lightweight-AAA premise are both existential. C's preview idea is explicitly out of submission scope. TypeScript/JavaScript first, plus Python for single-package repos (amended 2026-10-26, see the amendment under Committed Contracts). One coding-agent CLI adapter first. Llama for district naming, narration, and diff-to-English reports, which is also the Meta AI tooling surface.
 
 Open rule check before committing the agent runtime: confirm what counts for "Use of Meta AI tooling" and whether the coding agent itself must run on a Meta model. That answer decides OpenHands/Llama versus a stronger model for edits with Llama on the city layer.
 
@@ -86,11 +86,11 @@ The map is a **low-poly quest archipelago**. DESIGN.md is the source of truth; t
 - What exactly does "Use of Meta AI tooling" require, and can the code-editing agent run on a non-Meta model while Llama runs the city intelligence?
 - Which agent runtime: OpenHands headless, an existing coding-agent CLI per session, or a minimal tool-calling loop? Decided by the rule check above plus a day-1 spike.
 - Visual direction: decided 2026-10-26 (quest archipelago, see Visual Direction and DESIGN.md). Still open: the command bar and report card visuals, and whether Muse gets a role beyond the Llama naming and reports.
-- How are districts defined on a messy vibe-coded repo with weak folder structure: directories, import-graph communities (Louvain), or a hybrid? Needs a test on the friend's real repo.
+- How are districts defined on a messy repo with weak folder structure: directories, import-graph communities (Louvain), or a hybrid? Needs a test on a real repo (GestiKo).
 
 ## Success Criteria
 
-- Kill criterion, day 3: the friend opens his own repo, points at a district, starts an agent there, and watches it work. If not, cut visual fidelity, not the control loop.
+- Kill criterion, day 3: the repo owner opens the demo repo, points at a district, starts an agent there, and watches it work. If not, cut visual fidelity, not the control loop.
 - Demo criterion: in the 3-minute video, a viewer with no context can retell what the repo does, what the agent was asked, and what changed, in plain English.
 - Honesty criterion: every visible worker movement and status maps to a real agent event, or is marked unknown. Nothing decorative is presented as live work.
 
@@ -100,11 +100,11 @@ Public GitHub repo (a submission requirement), local browser app run from the re
 
 ## Next Steps
 
-1. Rule check on Meta AI tooling, then a day-1 spike: repo to import graph to districts on the friend's real repo (TS/JS first).
+1. Rule check on Meta AI tooling, then a day-1 spike: repo to import graph to districts on a real repo (GestiKo; TypeScript first, Python added per the 2026-10-26 amendment).
 2. Live loop on a fixed layout: agent file events move the worker, scaffolding on the active building, English report on finish.
 3. Session CRUD on the map (create, inspect, pause/stop, delete/archive), one worktree per session, plus the one real drag-connect dispatch.
 4. Visual direction is decided (quest archipelago, DESIGN.md); next is building the sprite pipeline into the Pixi client and mocking the command bar and report card, then polish. No Approach C footprint work in the submission scope.
-5. Rehearse the exact 3-minute demo on the friend's repo; record a live run and label anything scripted.
+5. Rehearse the exact 3-minute demo on the demo repo (GestiKo); record a live run and label anything scripted.
 
 ## What I noticed about how you think
 
@@ -135,8 +135,14 @@ Dragging a road from district A to district B means: "make B able to use A." It 
 - Report generation fails: the user gets the raw event list and diff stats with a "report unavailable" label and a retry. A session never shows a polished report that was not generated from its real diff.
 
 ### Districts and connections
-Districts are directory-first: top-level packages/apps (workspace packages in a monorepo) are districts, because they are stable and explainable on a messy repo. Import-graph community detection (Louvain) is only a candidate refinement, tested on the friend's repo in the day-1 spike; it ships only if it produces districts a viewer can name. If clustering produces unusable districts, directory districts stand and nothing in the UI depends on Louvain.
-Connections are factual import edges extracted with the Oxc parser/resolver in Rust (Node extraction tools were rejected with the Node backend, see Decision ledger): A imports B. An edge's plain-English label is generated by Llama from the actual imported symbols and file names, and is marked as an explanation, not a fact. Inferred connections (Llama suspects a relation with no import edge) are never drawn as roads; they can appear only as suggestions in a district card, labeled as guesses.
+Districts are directory-first: top-level packages/apps (workspace packages in a monorepo) are districts, because they are stable and explainable on a messy repo. For a single-package repo (amended 2026-10-26), districts are the package's feature/module directories (for example `src/features/*` or `app/modules/*`), because a single package otherwise yields one district and no bridges. Import-graph community detection (Louvain) is only a candidate refinement, tested on a real repo in the day-1 spike; it ships only if it produces districts a viewer can name. If clustering produces unusable districts, directory districts stand and nothing in the UI depends on Louvain.
+Connections are factual import edges extracted in Rust — TypeScript/JavaScript with the Oxc parser/resolver, Python with a Python parser (amended 2026-10-26; Node extraction tools were rejected with the Node backend, see Decision ledger): A imports B. An edge's plain-English label is generated by Llama from the actual imported symbols and file names, and is marked as an explanation, not a fact. Inferred connections (Llama suspects a relation with no import edge) are never drawn as roads; they can appear only as suggestions in a district card, labeled as guesses.
+
+### Amendment 2026-10-26: single-package repos and Python extraction
+
+Why: the first real repo available as a test and demo target (GestiKo) is not a TypeScript monorepo. It is a single repo holding one TypeScript frontend package and one Python backend (measured: 184 TS/TSX files, 416 Python files). Under the original scope the Python backend was invisible and the single frontend package produced one district with no bridges, so there was no real repo the demo could run on. Real projects of this kind are commonly single-package and polyglot rather than TypeScript monorepos, so supporting that shape is what makes real examples possible at all.
+
+Decided: (1) districts also come from feature/module directories inside a single package; (2) Python import extraction is in scope alongside TypeScript/JavaScript; (3) Go extraction is deferred to the end of the hackathon, only if time remains, and is not committed scope; (4) multi-repo support stays out of scope. The day-3 kill gate, cut order, and never-cut list are unchanged.
 
 ### Runtime fallback split
 - If the Meta AI tooling rules require the code-editing agent to run on a Meta model: the agent runs on the required model, and the live loop, event mapping, and reports stay identical. Demo tasks are then chosen small enough for that model, rehearsed in advance.
@@ -653,7 +659,7 @@ Approval readiness: PASS — R1 (D3), R2 (D4), R3 (D5), R4 (D6), R5 (D7), R6 (D8
 
 ## NOT in scope
 - Approach C: footprint prediction, spatial collision forecasting, translucent future preview. Out of submission scope (office-hours Scope decision). Real-event overlap (D16) and district locks (D17) are the MVP substitute.
-- Multi-repo support, non-TS/JS extraction, additional agent adapters beyond Claude primary + Codex fallback.
+- Multi-repo support, extraction for languages other than TypeScript/JavaScript and Python, additional agent adapters beyond Claude primary + Codex fallback. (Python extraction and single-package districts were brought into scope on 2026-10-26; Go is deferred to the end of the hackathon, only if time remains, and is not committed scope. See the amendment under Committed Contracts.)
 - Code editor beyond drill-down diff/file view; auth; hosted service; desktop packaging (Tauri rejected implicitly by D2 web-client choice).
 - Process-suspension pause (replaced by stop + resume, D10).
 
@@ -669,7 +675,7 @@ Approval readiness: PASS — R1 (D3), R2 (D4), R3 (D5), R4 (D6), R5 (D7), R6 (D8
 Repo open and live loop (proposed):
 ```
 User opens repo
-  -> Rust: walk files, Oxc parse imports, directory-first districts
+  -> Rust: walk files, parse imports (Oxc for TS/JS, a Python parser for Python), directory-first districts
   -> SQLite cache (content hash): hit = reuse layout+naming, miss = parse + Llama name
   -> Pixi client renders frozen city (districts, buildings, roads), drawn as islands, typed buildings and bridges by the sprite pipeline (DESIGN.md, D23)
 User starts session on a district (district lock, D17)
@@ -718,7 +724,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Outside Voice C1 / R5 (D7)
   - Files: docs/meta-tooling-rule.md (new repo)
   - Verify: rule text quoted; if ambiguous, Discord office-hours answer attached
-- [ ] **T2 (P1, human: ~2d / CC: ~3h)** — Server extract — Oxc-based TS/JS extraction: directory districts, import roads, parsed/resolved/unresolved counts
+- [x] **T2 (P1, human: ~2d / CC: ~3h)** — Server extract — Oxc-based TS/JS extraction: directory districts, import roads, parsed/resolved/unresolved counts
   - Surfaced by: Architecture A1 + Section 2 extraction-uncertainty finding
   - Files: server/src/extract/
   - Verify: cargo test on fixture repos; unresolved count matches hand count
@@ -763,7 +769,12 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Files: client/src/ui/
   - Verify: Vitest state tests per component state; Playwright journeys for create, pause, resume, stop, archive and Accept from the report card
 
-REALITY: premise-table pass (binding premises quoted from approved design; unverified=2: friend repo language/size, team capacity) dinomeschini-unknown-design-20261026-151207.md:65-68
+- [x] **T13 (P1, human: ~2d / CC: ~3h)** — Server extract (amendment) — Single-package districts (feature/module directories) and Python import extraction, tested on GestiKo
+  - Surfaced by: Amendment 2026-10-26 (single-package repos and Python extraction)
+  - Files: server/src/extract/
+  - Verify: cargo test on a Python fixture with hand-counted imports; extractor run on GestiKo lists Python districts and bridges
+
+REALITY: premise-table pass (binding premises quoted from approved design; unverified=1: team capacity. Friend-repo language/size corrected 2026-10-26: GestiKo is Python backend + one TS frontend, not a TS/JS monorepo; not the current demo target — see notes/working-notes.md) dinomeschini-unknown-design-20261026-151207.md:65-68
 REALITY: already-done pass (no git repo exists; nothing built or merged) dinomeschini-unknown-design-20261026-151207.md:5
 REALITY: surface-check pass (Claude/Codex flags verified in installed --help 2026-10-26) dinomeschini-unknown-design-20261026-151207.md:138
 REALITY: binding-decisions pass (approved premises + D1-D18 ledger outrank defaults; Node rejection recorded as binding) dinomeschini-unknown-design-20261026-151207.md:25

@@ -6,7 +6,7 @@ Everything needed to work on this project, in one place. If a note here conflict
 
 | What | Canonical location | Repo copy |
 |---|---|---|
-| Approved design doc (problem, premises, approaches, visual direction, committed contracts, D1–D23 decision ledger, implementation tasks T1–T12, GSTACK REVIEW REPORT) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-design-20261026-151207.md` (Status: APPROVED) | [specs/design.md](../specs/design.md) |
+| Approved design doc (problem, premises, approaches, visual direction, committed contracts, D1–D23 decision ledger, implementation tasks T1–T13, GSTACK REVIEW REPORT) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-design-20261026-151207.md` (Status: APPROVED) | [specs/design.md](../specs/design.md) |
 | Test plan (5 E2E journeys, edge cases, critical paths) | `~/.gstack/projects/meta-hackathon/dinomeschini-unknown-eng-review-test-plan-20261026-160000.md` | [specs/test-plan.md](../specs/test-plan.md) |
 | Machine-readable tasks | `~/.gstack/projects/meta-hackathon/tasks-eng-review-20261026-163341.jsonl` | [specs/tasks.jsonl](../specs/tasks.jsonl) |
 | Hackathon rules | [specs/hackathon-rules.md](../specs/hackathon-rules.md) | same |
@@ -27,7 +27,7 @@ Everything needed to work on this project, in one place. If a note here conflict
 
 - **Visual direction (2026-10-26): low-poly quest archipelago** — modules are islands, imports are bridges, agents are ships, a bottom command bar with a quest log is the only panel. Codex image generation makes the art; sprites are placed by measured footprint plates on a grid-fitted tile set with an occupancy grid. Full rules in [DESIGN.md](../DESIGN.md).
 - Approach B: isometric city (rendered as the archipelago above). Node.js backend **rejected** by the user. **One Rust binary (Axum) serving a PixiJS/TypeScript client.** Tauri rejected.
-- TS/JS extraction in Rust with **Oxc** (`oxc_parser`, `oxc_resolver`). dependency-cruiser/ts-morph are out with Node.
+- TS/JS extraction in Rust with **Oxc** (`oxc_parser`, `oxc_resolver`); Python extraction added 2026-10-26 for single-package repos (see the amendment in specs/design.md). dependency-cruiser/ts-morph are out with Node.
 - SQLite via **rusqlite**: session state, append-only event log (per-session sequence), extraction cache keyed by file content hash.
 - One **normalized event enum** in Rust. Adapters: **Claude Code CLI primary, Codex CLI fallback.** Adapter pass bar: ≥80% of file changes mapped to a building, 100% of session/test outcomes mapped (watcher is the denominator).
 - **Filesystem watcher (`notify`) + `git status`** is ground truth for file-touched. CLI events carry intent/narration only.
@@ -48,13 +48,14 @@ Everything needed to work on this project, in one place. If a note here conflict
 
 ## Unverified premises (resolve at kickoff)
 
-- Friend's demo repo: language (assumed TS/JS), size, install size/time. Getting this repo is part of the assignment below. Fallback: a prepared TS/JS monorepo fixture.
+- Demo repo (corrected 2026-10-26): [GestiKo](https://github.com/juanmanuelaidar/GestiKo), a single repo with one TS frontend package and one Python backend — not a TS/JS monorepo. Measured at clone: 705 files (416 `.py`, 184 `.ts`/`.tsx`, single Vite/React package, no workspaces). T2 run before the Python amendment: only the frontend was extracted (184 files, 1,158 imports, 603 resolved, 555 unresolved — mostly external packages, because `node_modules` is not installed — 1 island, 0 bridges). Task T13 covers the fix: single-package districts and Python extraction, tested on GestiKo. Install size/time: not measured.
+- Demo-repo scope decision (2026-10-26, user, refined same day): make extraction work on single-package repos like GestiKo (one frontend package + one Python backend in a single repo), and add Python extraction. Go is deferred to the end of the hackathon, only if time remains — it is not committed scope. This re-opens the design doc's "non-TS/JS extraction is out of scope" line for Python only; the amendment is recorded in `specs/design.md` (Amendment 2026-10-26), and the TS fixture mainline and all other tasks keep moving meanwhile. What "single-package support" means concretely: islands must work below package level (GestiKo's `frontend/src/features/*` and `backend/app/modules/*`), since a single-package repo otherwise yields one island and no bridges. Multi-repo support stays out of scope. Implemented in T13: run on GestiKo gives 600 files parsed (416 Python + 184 TS), 3,988 imports, 1,969 resolved, 2,019 unresolved (mostly external packages with no installed dependencies on either side), 43 islands, 232 bridges, 0 parse errors. Tested on a real repo for extraction counts only; the paper-test/retelling check with the repo owner is still open.
 - Team size/capacity ("small team up to 4" is unconfirmed). Spike owners in gate 2 force this answer.
 - Render scale at ~2,000 buildings (60 fps, <500 MB app-only on the demo machine) — measured at the day-3 gate (task T9), not before.
 
 ## The assignment (before building the renderer)
 
-Moodboard: done (2026-10-26). Still to do: get the vibe-coder friend's real repo. Paper-test the 3-minute story on him: open his repo, name three districts, narrate one agent task and its English report. He must retell what the repo does in 20 seconds. If he cannot, the district model is wrong, not the art.
+Moodboard: done (2026-10-26). Friend's repo: received (GestiKo, see the corrected premise above) but not usable as the demo repo yet — its Python backend is invisible to the extractor and its frontend yields one island today. Still to do: pick the actual demo repo (or scope GestiKo's frontend with feature-level islands), then paper-test the 3-minute story on its owner: open the repo, name three districts, narrate one agent task and its English report. He must retell what the repo does in 20 seconds. If he cannot, the district model is wrong, not the art.
 
 ## Tools and access already verified (2026-10-26)
 

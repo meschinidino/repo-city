@@ -1,0 +1,26 @@
+[package]
+name = "repo-city-server"
+version = "0.2.0"
+edition = "2021"
+description = "Repo City server. T2 spike: Oxc-based TS/JS extraction (directory islands, import bridges, counts). Axum comes later."
+license = "MIT"
+
+[lib]
+name = "repo_city_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "repo-city-extract"
+path = "src/bin/repo-city-extract.rs"
+
+[dependencies]
+oxc_allocator = "0.155"
+oxc_ast = "0.155"
+oxc_parser = "0.155"
+oxc_span = "0.155"
+oxc_resolver = "11"
+rustpython-parser = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]

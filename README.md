@@ -21,7 +21,7 @@ Version 0.1.2. Design phase complete and approved; visual direction and sprite p
 
 ## Planned shape
 
-One Rust binary (Axum) that scans a TypeScript/JavaScript repo with the Oxc parser, builds directory-first islands and import bridges, manages agent sessions in git worktrees, and serves a PixiJS isometric map client. The art is generated low-poly sprite sheets, placed on the map by measurement (footprint plates, a grid-fitted tile set, an occupancy grid) and checked automatically for overlap, gaps and cropping. Agent sessions run through existing coding-agent CLIs behind one normalized event contract; a filesystem watcher is the ground truth for what each agent actually touched. Meta AI models (Llama) name the districts, explain the connections, and turn diffs into plain-English reports.
+One Rust binary (Axum) that scans a TypeScript/JavaScript or Python repo (Oxc for TS/JS, a Python parser for Python — Python added 2026-10-26 for single-package repos), builds directory-first islands and import bridges, manages agent sessions in git worktrees, and serves a PixiJS isometric map client. The art is generated low-poly sprite sheets, placed on the map by measurement (footprint plates, a grid-fitted tile set, an occupancy grid) and checked automatically for overlap, gaps and cropping. Agent sessions run through existing coding-agent CLIs behind one normalized event contract; a filesystem watcher is the ground truth for what each agent actually touched. Meta AI models (Llama) name the districts, explain the connections, and turn diffs into plain-English reports.
 
 Highlights of the design:
 

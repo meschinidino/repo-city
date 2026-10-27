@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@fixture/shared": ["packages/shared/src/index.ts"],
+      "@fixture/api": ["packages/api/src/index.ts"],
+      "@fixture/web": ["packages/web/src/main.tsx"],
+      "@fixture/cli": ["packages/cli/src/index.ts"]
+    }
+  }
+}

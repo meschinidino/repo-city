@@ -1,6 +1,6 @@
 # Roadmap
 
-From the approved design ([specs/design.md](specs/design.md)): its Next Steps, the ten-day plan, gates and tasks T1–T12, in order. Submission is due **Nov 4, 9:00 PM ET**. Cut order if late: polish → pause/resume → Louvain → overlap marker. Never cut: real event mapping, finish flow, failure states, English reports, drag-connect.
+From the approved design ([specs/design.md](specs/design.md)): its Next Steps, the ten-day plan, gates and tasks T1–T13, in order. Submission is due **Nov 4, 9:00 PM ET**. Cut order if late: polish → pause/resume → Louvain → overlap marker. Never cut: real event mapping, finish flow, failure states, English reports, drag-connect.
 
 ## 1. Visual direction and sprite pipeline — done (v0.1.0, 2026-10-26)
 
@@ -12,16 +12,17 @@ From the approved design ([specs/design.md](specs/design.md)): its Next Steps, t
 ## 2. Rule check and day-1 spikes
 
 - T1: read the Official Rules and settle what counts for "Use of Meta AI tooling" (25%) before any adapter code; decide Llama's and Muse's roles.
-- T2: Oxc extraction on the demo repo — directory-first islands, import bridges, unresolved-import counts.
+- T2: Oxc extraction on the demo repo — directory-first islands, import bridges, unresolved-import counts. Done against a stand-in fixture.
+- T13: single-package districts (feature/module directories) and Python extraction, tested on GestiKo. Added 2026-10-26 because the available real repo is a single-package TypeScript frontend plus a Python backend, not a TS monorepo (see the amendment in [specs/design.md](specs/design.md)). Go extraction only at the end of the hackathon if time remains; not committed scope.
 - T3: normalized event enum with the Claude Code adapter (primary) and Codex (fallback), held to the pass thresholds.
 - T8: permission bridge per CLI and secret redaction with the planted-secret test.
-- Get the vibe-coder friend's real repo and paper-test the 3-minute story on him.
+- Paper-test the 3-minute story on the demo repo's owner.
 
 ## 3. Live loop on the map (day-3 kill gate)
 
 - Axum server, SQLite store, WebSocket event stream.
 - T4: filesystem watcher plus `git status` as ground truth for file touches.
-- T11: port the sprite pipeline from step 1 into the client; its geometry checks become tests and run at load; tile edge error under 1%; building type from the Oxc parse.
+- T11: port the sprite pipeline from step 1 into the client; its geometry checks become tests and run at load; tile edge error under 1%; building type from the extraction parse.
 - T7, first slice: the Pixi client renders islands from the extraction with that pipeline, a ship sails on session start, windows light on file touches, scaffolding on the building being edited.
 - English report from the real diff when a session ends.
 - Gate: one repo, one session, directory islands, the ship and lights move only on real events, and the report lands. If it fails, cut visual fidelity, never the control loop.
@@ -50,5 +51,5 @@ From the approved design ([specs/design.md](specs/design.md)): its Next Steps, t
 ## 8. Polish, demo and submission
 
 - T10: one-command run from a clean clone.
-- Rehearse the exact 3-minute demo on the friend's repo; record one live run, label anything sped up or cut on screen.
+- Rehearse the exact 3-minute demo on the demo repo (GestiKo); record one live run, label anything sped up or cut on screen.
 - Submit on the Cerebral Valley platform with every teammate listed, the video, and this repo verified in a logged-out browser.

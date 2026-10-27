@@ -117,7 +117,7 @@ components:
 | New module | An island rising from the sea once the folder actually exists |
 | You | The home harbor at the map edge, where idle ships dock |
 
-**Building types** (by what the file does, detected from the Oxc parse; Llama classifies what the rules can't):
+**Building types** (by what the file does, detected from the extraction parse; Llama classifies what the rules can't):
 
 | File | Building | Footprint |
 |---|---|---|
