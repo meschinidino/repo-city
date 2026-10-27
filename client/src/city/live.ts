@@ -48,9 +48,9 @@ async function jsonOrThrow(res: Response): Promise<unknown> {
   });
 }
 
-async function fetched(url: string): Promise<Response> {
+async function fetched(url: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(url);
+    return await fetch(url, init);
   } catch (e) {
     throw new LiveError("unreachable", e instanceof Error ? e.message : String(e));
   }
@@ -66,9 +66,9 @@ export function loadFailureText(server: string, e: Error): string {
   const kind = e instanceof LiveError ? e.kind : e instanceof TypeError ? "unreachable" : "refused";
   switch (kind) {
     case "unreachable":
-      return `Could not reach the Repo City server at ${server} (${e.message}). Start it with: cargo run --bin repo-city-server-bin (in server/). Nothing was rendered from invented data.`;
+      return `Nothing answered from the Repo City server at ${server} (${e.message}). Start it with: cargo run --bin repo-city-server-bin (in server/). If it is already running, it may be refusing this page's origin. Nothing was rendered from invented data.`;
     case "bad-url":
-      return `That server address is not a valid URL: ${server}. Fix the server parameter and reload. Nothing was rendered from invented data.`;
+      return `That server address is not a valid URL: ${server}. It must start with http:// or https://. Fix the server parameter and reload. Nothing was rendered from invented data.`;
     case "not-json":
       return `Something answered at ${server}, but not with Repo City JSON. The server parameter should point at the Rust server (default http://127.0.0.1:8787), not the Vite page. Nothing was rendered from invented data.`;
     case "server-error":
@@ -78,12 +78,20 @@ export function loadFailureText(server: string, e: Error): string {
   }
 }
 
-export async function fetchExtraction(server: string, repo: string): Promise<Extraction> {
+function assertHttpServer(server: string): void {
+  let protocol: string;
   try {
-    new URL(server);
+    protocol = new URL(server).protocol;
   } catch {
     throw new LiveError("bad-url", `invalid server URL: ${server}`);
   }
+  if (protocol !== "http:" && protocol !== "https:") {
+    throw new LiveError("bad-url", `server URL must start with http:// or https://: ${server}`);
+  }
+}
+
+export async function fetchExtraction(server: string, repo: string): Promise<Extraction> {
+  assertHttpServer(server);
   const res = await fetched(`${server}/api/extraction?path=${encodeURIComponent(repo)}`);
   return (await jsonOrThrow(res)) as Extraction;
 }
@@ -93,7 +101,7 @@ export async function createSession(
   repo: string,
   opts: { task?: string; spawn?: boolean; islandId?: string } = {},
 ): Promise<SessionInfo> {
-  const res = await fetch(`${server}/api/sessions`, {
+  const res = await fetched(`${server}/api/sessions`, {
     method: "POST",
     // The custom header forces a CORS preflight, so a random web
     // page cannot create sessions with a simple cross-origin POST.
@@ -109,7 +117,7 @@ export async function createSession(
 }
 
 export async function stopSession(server: string, sessionId: string): Promise<void> {
-  const res = await fetch(`${server}/api/sessions/${sessionId}/stop`, {
+  const res = await fetched(`${server}/api/sessions/${sessionId}/stop`, {
     method: "POST",
     headers: { "x-repo-city": "1" },
   });
@@ -117,7 +125,7 @@ export async function stopSession(server: string, sessionId: string): Promise<vo
 }
 
 export async function fetchReport(server: string, sessionId: string): Promise<DiffReportView> {
-  const res = await fetch(`${server}/api/sessions/${sessionId}/report`);
+  const res = await fetched(`${server}/api/sessions/${sessionId}/report`);
   return (await jsonOrThrow(res)) as DiffReportView;
 }
 

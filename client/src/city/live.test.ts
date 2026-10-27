@@ -27,10 +27,14 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("load failure classification (stubbed fetch)", () => {
   it("network down → start the server", async () => {
+    // A CORS refusal is the same TypeError at the fetch layer, so
+    // the copy names both options instead of assuming one cause.
     stubFetch(() => Promise.reject(new TypeError("Failed to fetch")));
     const e = await failureOf(fetchExtraction(SERVER, "/repo"));
     expect(e).toBeInstanceOf(LiveError);
-    expect(loadFailureText(SERVER, e)).toContain("cargo run");
+    const text = loadFailureText(SERVER, e);
+    expect(text).toContain("cargo run");
+    expect(text).toContain("refusing this page's origin");
   });
 
   it("400 with an error body → refused, fix the path", async () => {
@@ -58,5 +62,10 @@ describe("load failure classification (stubbed fetch)", () => {
   it("malformed server URL → fix the address", async () => {
     const e = await failureOf(fetchExtraction("not a url", "/repo"));
     expect(loadFailureText("not a url", e)).toContain("not a valid URL");
+  });
+
+  it("scheme-less host:port (localhost:8787) → fix the address, not restart", async () => {
+    const e = await failureOf(fetchExtraction("localhost:8787", "/repo"));
+    expect(loadFailureText("localhost:8787", e)).toContain("must start with http://");
   });
 });

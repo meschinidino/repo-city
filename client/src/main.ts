@@ -86,6 +86,8 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   const session = await createSession(server, repo, {
     task: params.get("task") ?? undefined,
     spawn: params.get("spawn") === "1",
+  }).catch((e: Error) => {
+    throw new Error(`could not create a session on ${server}: ${e.message}`);
   });
   // No island is chosen at creation (quest targeting is T12), so the
   // ship has no home: it stays off-screen until a real event places
