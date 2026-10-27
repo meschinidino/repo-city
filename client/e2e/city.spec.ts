@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
-import { cpSync, appendFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { cpSync, appendFileSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -30,13 +30,16 @@ test.beforeAll(async () => {
   test.setTimeout(290_000);
   const serverDir = resolve(process.cwd(), "../server");
   const bin = join(serverDir, "target/debug/repo-city-server-bin");
-  // Never test against a stale binary: rebuild when the server
-  // sources are newer than it.
-  const newestSource = Math.max(
-    statSync(join(serverDir, "Cargo.toml")).mtimeMs,
-    statSync(join(serverDir, "src/app.rs")).mtimeMs,
-    statSync(join(serverDir, "src/lib.rs")).mtimeMs,
-  );
+  // Never test against a stale binary: rebuild when any server
+  // source (recursive walk) is newer than it.
+  const newestSource = (function walk(dir: string): number {
+    let newest = 0;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      newest = Math.max(newest, entry.isDirectory() ? walk(p) : statSync(p).mtimeMs);
+    }
+    return newest;
+  })(join(serverDir, "src"));
   if (!existsSync(bin) || statSync(bin).mtimeMs < newestSource) {
     execSync("cargo build --bin repo-city-server-bin", {
       cwd: serverDir,
@@ -59,7 +62,9 @@ test.beforeAll(async () => {
     for (let i = 0; i < 25; i++) {
       try {
         const res = await fetch(`${candidate}/health`);
-        if (res.ok) {
+        // Only accept the port when OUR process is the one alive
+        // behind it (a foreign server answering /health is not us).
+        if (res.ok && serverProc.exitCode === null) {
           SERVER = candidate;
           break;
         }

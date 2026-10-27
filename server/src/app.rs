@@ -212,15 +212,16 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/report", get(session_report))
         .route("/api/sessions/{id}/stop", post(stop_session))
         .route("/ws", get(ws_handler))
-        // Local single-user tool: only the Vite dev client may call
-        // this API from a browser. A permissive layer would let any
-        // web page spawn agents in local repos.
+        // Local single-user tool: only loopback pages (the Vite dev
+        // client) may call this API from a browser. A permissive
+        // layer would let any web page spawn agents in local repos.
         .layer(
             tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::AllowOrigin::list([
-                    "http://localhost:5173".parse().unwrap(),
-                    "http://127.0.0.1:5173".parse().unwrap(),
-                ]))
+                .allow_origin(tower_http::cors::AllowOrigin::predicate(
+                    |origin: &axum::http::HeaderValue, _| {
+                        origin.to_str().map(is_loopback_origin).unwrap_or(false)
+                    },
+                ))
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any),
         )
@@ -231,21 +232,21 @@ fn err(status: StatusCode, msg: String) -> (StatusCode, Json<serde_json::Value>)
     (status, Json(serde_json::json!({ "error": msg })))
 }
 
-/// Browser boundary for this local tool: pages may only talk to the
-/// server from the Vite dev origins. Mutating POSTs additionally
-/// require the `x-repo-city` header — a cross-site form POST cannot
-/// set it (and setting it forces a CORS preflight), which closes
-/// the CSRF hole that CORS alone leaves open. Non-browser clients
-/// (curl, tests) send no Origin and are bound to loopback anyway.
-const DEV_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5173"];
+/// Browser boundary for this local tool: pages may only talk to
+/// the server from a loopback origin (the Vite dev server, on
+/// whatever port it picked). Mutating POSTs additionally require
+/// the `x-repo-city` header — a cross-site form POST cannot set it
+/// (and setting it forces a CORS preflight), which closes the CSRF
+/// hole that CORS alone leaves open. Non-browser clients (curl,
+/// tests) send no Origin and are bound to loopback anyway.
+fn is_loopback_origin(origin: &str) -> bool {
+    origin.starts_with("http://localhost:") || origin.starts_with("http://127.0.0.1:")
+}
 
 fn origin_allowed(headers: &axum::http::HeaderMap) -> bool {
     match headers.get(axum::http::header::ORIGIN) {
         None => true,
-        Some(origin) => origin
-            .to_str()
-            .map(|o| DEV_ORIGINS.contains(&o))
-            .unwrap_or(false),
+        Some(origin) => origin.to_str().map(is_loopback_origin).unwrap_or(false),
     }
 }
 
