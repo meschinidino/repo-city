@@ -24,25 +24,25 @@ Lines marked **▸ gstack** are reminders for whoever is working (Dino, Claude C
 
 Setup (Dino):
 - Trust this folder in Muse Code, or it won't load `AGENTS.md`.
-- Get the vibe-coder friend's real repo; until then T2 runs on a labeled stand-in fixture.
+- Demo repo received: GestiKo (single-package TS frontend plus Python backend). T2 ran on a labeled stand-in fixture; T13 covers GestiKo.
 - Confirm team size and name one owner per spike.
 
 Work:
 - T1 (Dino): accept the Official Rules in the portal and settle what counts for "Use of Meta AI tooling" (25%) before any adapter code. Ask in Discord #office-hours whether building with Muse Code counts, then decide Llama's and Muse's roles. Record it in `docs/meta-tooling-rule.md`.
-- T2 (done): Oxc extraction — directory-first islands, import bridges, file roles for building types, parsed/resolved/unresolved counts. Done against a stand-in fixture.
-- T13 (done): single-package districts (feature/module directories) and Python extraction, tested on GestiKo. Added 2026-10-26 because the available real repo is a single-package TypeScript frontend plus a Python backend, not a TS monorepo (see the amendment in [specs/design.md](specs/design.md)). Go extraction only at the end of the hackathon if time remains; not committed scope.
-- T11 (done): port the sprite pipeline from step 1 into the client; its geometry checks are Vitest tests and run at load; tile edge error 0.25% (target under 1%).
+- T2 (can start now): Oxc extraction — directory-first islands, import bridges, file roles for building types, parsed/resolved/unresolved counts. Done against a stand-in fixture.
+- T13 (can start now): single-package districts (feature/module directories) and Python extraction, tested on GestiKo. Added 2026-10-26 because the available real repo is a single-package TypeScript frontend plus a Python backend, not a TS monorepo (amendment in specs/design.md). Go extraction only at the end of the hackathon if time remains; not committed scope.
+- T11 (can start now): port the sprite pipeline from step 1 into the client; its geometry checks become Vitest tests and run at load; tile edge error under 1%.
 - T3 (after T1): normalized event enum with the Claude Code adapter (primary) and Codex (fallback), held to the pass thresholds.
 - T8 (after T1): permission bridge per CLI and secret redaction with the planted-secret test.
   - **▸ gstack `/cso`** on the permission bridge and redaction before it merges.
 - Record labeled-simulated CLI event fixtures once the event enum is frozen, so the client can be built in parallel (lane B in the design doc).
-- Paper-test the 3-minute story on the friend: he must retell what his repo does in 20 seconds.
+- Paper-test the 3-minute story on the demo repo's owner: they must retell what the repo does in 20 seconds.
 
 ## 3. Live loop on the map (day-3 kill gate)
 
 - Axum server, SQLite store, WebSocket event stream.
 - T4: filesystem watcher plus `git status` as ground truth for file touches.
-- T7, first slice: the Pixi client renders islands from the extraction with the T11 pipeline (done in step 2), a ship sails on session start, windows light on file touches, scaffolding on the building being edited.
+- T7, first slice: the Pixi client renders islands from the extraction with the T11 pipeline, a ship sails on session start, windows light on file touches, scaffolding on the building being edited.
 - English report from the real diff when a session ends.
 - Eval harness on pinned fixtures for Llama naming and reports, and for building-type classification (test plan [EVAL] paths).
 - Gate: one repo, one session, directory islands, the ship and lights move only on real events, and the report lands. If it fails, cut visual fidelity, never the control loop.
