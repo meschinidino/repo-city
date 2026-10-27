@@ -35,6 +35,8 @@ pub enum Role {
     Vendored,
     DeadCode,
     Ordinary,
+    /// A test file: not a building (DESIGN.md) — it shows as a pennant.
+    Test,
 }
 
 impl Role {
@@ -48,6 +50,7 @@ impl Role {
             Role::Generated | Role::Vendored => "containers",
             Role::DeadCode => "ruin",
             Role::Ordinary => "cottage",
+            Role::Test => "pennant",
         }
     }
 }
@@ -398,6 +401,7 @@ fn discover_islands(root: &Path, files: &[PathBuf]) -> Vec<IslandDef> {
                 entry_files: HashSet::new(),
             });
         }
+        split_parent_remainders(root, files, &mut islands);
         dedupe_island_ids(&mut islands);
         return islands;
     }
@@ -491,8 +495,65 @@ fn discover_islands(root: &Path, files: &[PathBuf]) -> Vec<IslandDef> {
             entry_files: HashSet::new(),
         });
     }
+    split_parent_remainders(root, files, &mut islands);
     dedupe_island_ids(&mut islands);
     islands
+}
+
+/// Split the remainder of a parent island: an island that contains
+/// other islands inside it (backend holds backend/app/modules/*) is
+/// a container, not a module, so the files no child island claims
+/// are grouped by their next directory (backend/tests,
+/// backend/alembic, backend/app, ...). Repeats while a child still
+/// contains islands of its own. Loose files stay with the parent.
+fn split_parent_remainders(root: &Path, files: &[PathBuf], islands: &mut Vec<IslandDef>) {
+    for _round in 0..3 {
+        let mut additions: Vec<IslandDef> = Vec::new();
+        for (island_idx, island) in islands.iter().enumerate() {
+            if island.rel_path == "." {
+                continue;
+            }
+            let has_child = islands
+                .iter()
+                .any(|other| other.abs_path != island.abs_path && other.abs_path.starts_with(&island.abs_path));
+            if !has_child {
+                continue;
+            }
+            let mut groups: BTreeMap<String, PathBuf> = BTreeMap::new();
+            for file in files {
+                if island_index_for(islands, file) != Some(island_idx) {
+                    continue;
+                }
+                let Ok(rel) = file.strip_prefix(&island.abs_path) else {
+                    continue;
+                };
+                let mut comps = rel.components();
+                if let (Some(dir), Some(_)) = (comps.next(), comps.next()) {
+                    let name = dir.as_os_str().to_string_lossy().into_owned();
+                    groups.entry(name).or_insert_with(|| island.abs_path.join(dir.as_os_str()));
+                }
+            }
+            if groups.len() < 2 {
+                continue;
+            }
+            for (name, dir) in groups {
+                if islands.iter().any(|i| i.abs_path == dir) || additions.iter().any(|i| i.abs_path == dir) {
+                    continue;
+                }
+                additions.push(IslandDef {
+                    id: rel_posix(root, &dir),
+                    name,
+                    rel_path: rel_posix(root, &dir),
+                    abs_path: dir,
+                    entry_files: HashSet::new(),
+                });
+            }
+        }
+        if additions.is_empty() {
+            break;
+        }
+        islands.extend(additions);
+    }
 }
 
 fn dedupe_island_ids(islands: &mut [IslandDef]) {
@@ -695,6 +756,13 @@ fn classify(
                 "drizzle",
             ],
         );
+    let is_test = components
+        .iter()
+        .any(|c| matches!(*c, "test" | "tests" | "__tests__" | "e2e"))
+        || stem.starts_with("test_")
+        || stem.ends_with("_test")
+        || file_name.contains(".test.")
+        || file_name.contains(".spec.");
     let extension = file_name.rsplit('.').next().unwrap_or("");
     let ui_component = matches!(extension, "tsx" | "jsx")
         || (stem.chars().next().is_some_and(|c| c.is_ascii_uppercase())
@@ -728,6 +796,9 @@ fn classify(
     if dead_code {
         roles.push(Role::DeadCode);
     }
+    if is_test {
+        roles.push(Role::Test);
+    }
     if roles.is_empty() {
         roles.push(Role::Ordinary);
     }
@@ -735,6 +806,7 @@ fn classify(
     // checked before dead code so a generated file with no importers still
     // reads as containers, not a ruin; its DeadCode role is still listed.
     let priority = [
+        Role::Test,
         Role::EntryPoint,
         Role::ExposesEndpoints,
         Role::DataAccess,
@@ -1010,6 +1082,9 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
     for island in &mut islands {
         island.files.sort();
     }
+    // A parent island whose files all moved to split children is a
+    // container, not a place: it is not listed.
+    islands.retain(|i| i.file_count > 0);
     islands.sort_by(|a, b| a.id.cmp(&b.id));
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -1107,6 +1182,23 @@ mod tests {
         assert_eq!(Role::Generated.building(), "containers");
         assert_eq!(Role::DeadCode.building(), "ruin");
         assert_eq!(Role::Ordinary.building(), "cottage");
+    }
+
+    #[test]
+    fn classify_tests_are_pennants_not_buildings() {
+        for path in [
+            "backend/tests/unit/test_pricing_engine.py",
+            "backend/app/modules/sales/test_router.py",
+            "frontend/tests/api-client.test.ts",
+            "frontend/e2e/commercial.spec.ts",
+            "pkg/widget_test.go",
+        ] {
+            let (roles, building) = classify(path, "export const x = 1;", false, 5);
+            assert_eq!(building, "pennant", "{path}");
+            assert!(roles.contains(&Role::Test), "{path}");
+        }
+        let (_, building) = classify("backend/app/core/clock.py", "x = 1", false, 0);
+        assert_ne!(building, "pennant");
     }
 
     #[test]

@@ -298,6 +298,21 @@ export class CityView {
 
     // buildings, one sprite per file, placed by its plate footprint
     for (const b of this.layout.buildings) {
+      if (b.building === "pennant") {
+        // Test files are not buildings (DESIGN.md): a small flag on
+        // a pole at the plot centre, in the island's depth order.
+        const [fx, fy] = proj.project(b.gx + PLOT / 2, b.gy + PLOT / 2);
+        const g = new Graphics();
+        g.moveTo(fx, fy);
+        g.lineTo(fx, fy - TW * 0.55);
+        g.stroke({ color: 0x7a5432, width: Math.max(1, TW * 0.03) });
+        g.poly([fx, fy - TW * 0.55, fx + TW * 0.34, fy - TW * 0.44, fx, fy - TW * 0.33]);
+        g.fill({ color: 0xe8cf92 });
+        const c = new Container();
+        c.addChild(g);
+        items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
+        continue;
+      }
       const key = BUILDING_SPRITE[b.building] ?? "cottage";
       const sprite = this.world.sprites.find((s) => s.key === key) ?? this.world.sprites.find((s) => s.key === "cottage");
       const texture = this.tex(key);
