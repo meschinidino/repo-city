@@ -1,5 +1,8 @@
-import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import { Application, Assets, Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
 import bridgeUrl from "../../../assets/sprites/bridge.png";
+import glow0Url from "../../../assets/sprites/glow-0.png";
+import glow1Url from "../../../assets/sprites/glow-1.png";
+import glow2Url from "../../../assets/sprites/glow-2.png";
 import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
@@ -36,7 +39,9 @@ export class CityView {
   private bridgeGfx!: Graphics;
   private bridgeSprites = new Container();
   private bridgeTex: Texture | null = null;
-  private pulseGfx!: Graphics;
+  private glowLayer = new Container();
+  private glowTexs: Texture[] = [];
+  private glowSprites: { spr: Sprite; span: [{ gx: number; gy: number }, { gx: number; gy: number }]; phase: number }[] = [];
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
     count: number;
@@ -94,11 +99,11 @@ export class CityView {
   /** Bridges by zoom level (D-zoom): at map zoom only strong pairs
    * (15+ imports, pinned from the GestiKo distribution: 24 of 381
    * pairs, 41% of imports) draw. At island zoom every pair draws.
-   * Drawn pairs use the bridge sprite (assets/sprites/bridge.png,
-   * owner pick run 1): segments repeat along the span and turn to
-   * the span angle. The sprite angle is fixed, so long spans in
-   * other directions are an approximation, not true perspective.
-   * Fallback with no texture: the old deck polygon / stroke. */
+   * Strong pairs use the bridge tile (assets/sprites/bridge.png,
+   * owner pick run 1, levelled and cut to one post-to-post unit):
+   * one TilingSprite per span, turned to the span angle, so the
+   * deck is one aligned piece with no segment steps. Weak pairs
+   * keep slim lines. Fallback with no texture: deck polygon. */
   private drawBridges(): void {
     const g = this.bridgeGfx;
     const proj = this.proj;
@@ -114,26 +119,14 @@ export class CityView {
         const len = Math.hypot(bx - ax, by - ay);
         const [c0, c3] = [pair.deck.corners[0], pair.deck.corners[3]].map((c) => proj.project(c.gx, c.gy));
         const deckW = Math.max(14, Math.hypot(c3[0] - c0[0], c3[1] - c0[1]));
-        // The deck axis in the source image runs lower-left to
-        // upper-right, about half the image height over its width.
-        const axisAngle = Math.atan2(-tex.height * 0.52, tex.width);
-        const axisLen = Math.hypot(tex.width, tex.height * 0.52);
-        // Scale so the sprite's width across the span matches the
-        // deck width, then repeat segments along the span. Sizing
-        // from the span length made decks far too wide.
-        const across = tex.width * Math.abs(Math.sin(axisAngle)) + tex.height * Math.abs(Math.cos(axisAngle));
-        const scale = (deckW * 2.6) / across;
-        const segs = Math.min(28, Math.max(1, Math.ceil(len / (axisLen * scale * 0.7))));
-        const angle = Math.atan2(by - ay, bx - ax);
-        for (let s = 0; s < segs; s++) {
-          const tm = (s + 0.5) / segs;
-          const spr = new Sprite(tex);
-          spr.anchor.set(0.5, 0.55);
-          spr.position.set(ax + (bx - ax) * tm, ay + (by - ay) * tm);
-          spr.rotation = angle - axisAngle;
-          spr.scale.set(scale);
-          this.bridgeSprites.addChild(spr);
-        }
+        const targetH = deckW * 2.6;
+        const ts = new TilingSprite({ texture: tex, width: len * 1.06, height: targetH });
+        ts.anchor.set(0.5);
+        ts.position.set((ax + bx) / 2, (ay + by) / 2);
+        ts.rotation = Math.atan2(by - ay, bx - ax);
+        const s = targetH / tex.height;
+        ts.tileScale.set(s, s);
+        this.bridgeSprites.addChild(ts);
       } else if (strong) {
         const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
         g.poly(corners);
@@ -150,43 +143,25 @@ export class CityView {
     }
   }
 
-  /** Direction glow: a soft light runs on the bridge itself, from
-   * the importing island toward the imported island, with a short
-   * fading tail. Island zoom only. This is a reading aid, not an
-   * agent signal (DESIGN.md stillness rule: noted as a departure
-   * in the PR for owner judgement). */
+  /** Direction glow (owner: sprite frames, not code dots): one
+   * glow sprite per import direction on a strong deck. The sprite
+   * travels the span, importer toward imported, and cycles its
+   * three frames (assets/sprites/glow-0..2.png) as it goes.
+   * Island zoom only. This is a reading aid, not an agent signal
+   * (DESIGN.md stillness rule: noted in the PR for judgement). */
   private drawPulses(nowMs: number): void {
-    const g = this.pulseGfx;
-    if (!g) return;
-    g.clear();
-    if (this.zoomLevel !== "island") return;
-    const TW = 64;
-    const at = (span: { gx: number; gy: number }[], t: number): [number, number] =>
-      this.proj.project(span[0].gx + (span[1].gx - span[0].gx) * t, span[0].gy + (span[1].gy - span[0].gy) * t);
-    let i = 0;
-    for (const pair of this.bridgePairs) {
-      if (pair.count < 15) continue; // glow runs on real decks only
-      for (const span of pair.dirs) {
-        i++;
-        const t = ((nowMs / 5000) + i * 0.37) % 1;
-        const tail = Math.max(0, t - 0.16);
-        const [tx, ty] = at(span, tail);
-        const [hx, hy] = at(span, t);
-        g.moveTo(tx, ty);
-        g.lineTo(hx, hy);
-        g.stroke({ color: 0xffd98a, width: TW * 0.1, alpha: 0.22 });
-        for (let k = 5; k >= 1; k--) {
-          const tk = t - k * 0.028;
-          if (tk < 0) continue;
-          const [px, py] = at(span, tk);
-          g.circle(px, py, TW * (0.085 - k * 0.008));
-          g.fill({ color: 0xffe3a3, alpha: 0.1 + (5 - k) * 0.09 });
-        }
-        g.circle(hx, hy, TW * 0.17);
-        g.fill({ color: 0xffd98a, alpha: 0.16 });
-        g.circle(hx, hy, TW * 0.075);
-        g.fill({ color: 0xfff2c4, alpha: 0.95 });
-      }
+    if (!this.glowLayer) return;
+    this.glowLayer.visible = this.zoomLevel === "island" && this.glowTexs.length > 0;
+    if (!this.glowLayer.visible) return;
+    const frame = Math.floor(nowMs / 160) % 3;
+    for (const glow of this.glowSprites) {
+      const t = ((nowMs / 4500) + glow.phase) % 1;
+      const [px, py] = this.proj.project(
+        glow.span[0].gx + (glow.span[1].gx - glow.span[0].gx) * t,
+        glow.span[0].gy + (glow.span[1].gy - glow.span[0].gy) * t,
+      );
+      glow.spr.position.set(px, py);
+      glow.spr.texture = this.glowTexs[(frame + Math.floor(glow.phase * 7)) % 3];
     }
   }
 
@@ -421,8 +396,8 @@ export class CityView {
       }
     }
     this.bridgeTex = (await Assets.load(bridgeUrl).catch(() => null)) as Texture | null;
+    this.glowTexs = ((await Promise.all([glow0Url, glow1Url, glow2Url].map((u) => Assets.load(u).catch(() => null)))).filter(Boolean) as Texture[]);
     this.bridgeGfx = new Graphics();
-    this.pulseGfx = new Graphics();
     root.addChild(this.bridgeSprites);
     root.addChild(this.bridgeGfx);
     this.drawBridges();
@@ -541,7 +516,25 @@ export class CityView {
       root.addChild(t);
     }
 
-    root.addChild(this.pulseGfx);
+    // Glow sprites: one per import direction on strong decks.
+    if (this.glowTexs.length) {
+      let gi = 0;
+      for (const pair of this.bridgePairs) {
+        if (pair.count < 15) continue;
+        for (const span of pair.dirs) {
+          gi++;
+          const spr = new Sprite(this.glowTexs[0]);
+          spr.anchor.set(0.5);
+          spr.width = TW * 1.15;
+          spr.height = TW * 0.67;
+          spr.blendMode = "add";
+          this.glowSprites.push({ spr, span, phase: (gi * 0.37) % 1 });
+          this.glowLayer.addChild(spr);
+        }
+      }
+    }
+    this.glowLayer.visible = false;
+    root.addChild(this.glowLayer);
 
     // construction overlay on the building being edited
     const constructionTex = this.tex("construction");
