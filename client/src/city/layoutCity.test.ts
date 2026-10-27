@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth } from "./layoutCity";
+import { arrangePlots, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -258,5 +258,43 @@ describe("hub placement", () => {
     }
     // Deterministic: same input, same map.
     expect(layoutCity(ext).islands.map((i) => [i.id, i.x, i.y])).toEqual(layout.islands.map((i) => [i.id, i.x, i.y]));
+  });
+});
+
+describe("building arrangement inside an island", () => {
+  it("landmark in the centre, same-kind adjacency minimised, deterministic", () => {
+    const kinds = ["cottage", "cottage", "keep", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage"];
+    const a = arrangePlots(kinds, 3, 3);
+    expect(a[2]).toEqual({ x: 1, y: 1 }); // the keep takes the centre
+    const adj = (arr: { x: number; y: number }[]) => {
+      let n = 0;
+      for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+        if (kinds[i] === kinds[j] && Math.abs(arr[i].x - arr[j].x) + Math.abs(arr[i].y - arr[j].y) === 1) n++;
+      }
+      return n;
+    };
+    // 8 cottages on the 8 plots around a centre keep must touch;
+    // the corners-only lower bound is 8 shared edges. Row-major
+    // order gives the same grid here, so assert the count is the
+    // minimum this fixture allows and that the rule is stable.
+    expect(adj(a)).toBe(8);
+    expect(arrangePlots(kinds, 3, 3)).toEqual(a);
+  });
+
+  it("spreads a mixed island better than row-major order", () => {
+    const kinds = ["cottage", "cottage", "lighthouse", "cottage", "market", "cottage", "cottage", "silos", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage"];
+    const a = arrangePlots(kinds, 4, 4);
+    expect(a[7]).toEqual({ x: 2, y: 2 }); // silos: highest-priority kind present, centre plot
+    const pos = new Map(a.map((pl, i) => [i, pl]));
+    let same = 0;
+    for (let i = 0; i < kinds.length; i++) for (let j = i + 1; j < kinds.length; j++) {
+      if (kinds[i] === kinds[j] && Math.abs(pos.get(i)!.x - pos.get(j)!.x) + Math.abs(pos.get(i)!.y - pos.get(j)!.y) === 1) same++;
+    }
+    let rowMajor = 0;
+    for (let i = 0; i < kinds.length; i++) for (let j = i + 1; j < kinds.length; j++) {
+      const pi = { x: i % 4, y: Math.floor(i / 4) }, pj = { x: j % 4, y: Math.floor(j / 4) };
+      if (kinds[i] === kinds[j] && Math.abs(pi.x - pj.x) + Math.abs(pi.y - pj.y) === 1) rowMajor++;
+    }
+    expect(same).toBeLessThan(rowMajor);
   });
 });

@@ -16,6 +16,7 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 - Bridges use D-zoom: at map zoom only pairs with 15+ imports draw as decks (24 of 381 pairs, 41% of imports on GestiKo). At island zoom all pairs draw. Chevrons are gone; direction is a moving pulse on the span at island zoom. This departs from the DESIGN.md stillness rule and is flagged in the PR for the owner.
 - Owner round 2: cliffs only where the land behind the shore is thick (thin shores stay beach); trees on free inner land cells (no mountain sprite exists in the sheets; a mountain sheet is future sprite-pipeline work); smarter placement: strongest island takes the centre, each next island takes the best free spot near its neighbours, with seeded jitter.
 - Numbers: Vitest 63 pass, tsc clean, Playwright 3 pass.
+- Owner round 3: buildings inside an island are arranged, not row-major. The landmark kind (keep, then silos, sea gate, lighthouse) takes the centre plot; the rest, most common kind first, take the free plot with the fewest same-kind neighbours. Cottages vary: one in three takes the slate roof, by file hash. Vitest 65 pass.
 >>>>>>> 48e3c3f (Map visuals in owner order: coast tiles, cliffs, organic outlines, compact test islets, D-zoom bridges)
 
 

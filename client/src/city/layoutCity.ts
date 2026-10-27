@@ -134,6 +134,75 @@ export interface CityBuilding {
   gy: number;
 }
 
+
+/** Landmark priority: the big building of the island. */
+export const LANDMARK_PRIORITY = ["keep", "silos", "sea_gate", "lighthouse", "market", "containers", "ruin", "cottage", "pennant"];
+
+/**
+ * Arrange one island's buildings on its plot grid (owner,
+ * 2026-10-27): the landmark (keep first, then the other big
+ * kinds) takes the centre plot. Every other building, most
+ * common kind first, takes the free plot with the fewest
+ * same-kind neighbours; ties break to the plot farthest from
+ * its nearest same-kind neighbour, then closest to the centre.
+ * Perfect spread is impossible when one kind outnumbers the
+ * plots around it; the rule minimises same-kind adjacency, and
+ * the layout test reports the count it achieves.
+ */
+export function arrangePlots(
+  kinds: string[],
+  cols: number,
+  rows: number,
+): { x: number; y: number }[] {
+  const plots: { x: number; y: number }[] = [];
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) plots.push({ x, y });
+  const out: ({ x: number; y: number } | null)[] = kinds.map(() => null);
+  if (kinds.length === 0) return [];
+  const centre = { x: Math.round((cols - 1) / 2), y: Math.round((rows - 1) / 2) };
+  const prio = (k: string) => {
+    const i = LANDMARK_PRIORITY.indexOf(k);
+    return i === -1 ? LANDMARK_PRIORITY.length : i;
+  };
+  let landmark = 0;
+  for (let i = 1; i < kinds.length; i++) if (prio(kinds[i]) < prio(kinds[landmark])) landmark = i;
+  const placed = new Map<string, number>(); // "x,y" -> file index
+  const take = (i: number, plot: { x: number; y: number }) => {
+    out[i] = plot;
+    placed.set(plot.x + "," + plot.y, i);
+  };
+  take(landmark, centre);
+  const freq = new Map<string, number>();
+  for (const k of kinds) freq.set(k, (freq.get(k) ?? 0) + 1);
+  const rest = kinds.map((_, i) => i)
+    .filter((i) => i !== landmark)
+    .sort((a, b) => (freq.get(kinds[b])! - freq.get(kinds[a])!) || prio(kinds[a]) - prio(kinds[b]) || a - b);
+  const free = () => plots.filter((pl) => !placed.has(pl.x + "," + pl.y));
+  for (const i of rest) {
+    let best: { x: number; y: number } | null = null;
+    let bestKey: [number, number, number] | null = null;
+    for (const pl of free()) {
+      let sameAdj = 0;
+      let nearestSame = Infinity;
+      for (const [key, j] of placed) {
+        const [px, py] = key.split(",").map(Number);
+        const d = Math.abs(px - pl.x) + Math.abs(py - pl.y);
+        if (kinds[j] === kinds[i]) {
+          if (d === 1) sameAdj++;
+          nearestSame = Math.min(nearestSame, d);
+        }
+      }
+      const centreDist = Math.abs(pl.x - centre.x) + Math.abs(pl.y - centre.y);
+      const cand: [number, number, number] = [sameAdj, -(nearestSame === Infinity ? 99 : nearestSame), centreDist];
+      if (!bestKey || cand[0] < bestKey[0] || (cand[0] === bestKey[0] && (cand[1] < bestKey[1] || (cand[1] === bestKey[1] && cand[2] < bestKey[2])))) {
+        best = pl;
+        bestKey = cand;
+      }
+    }
+    if (best) take(i, best);
+  }
+  return out as { x: number; y: number }[];
+}
+
 export interface CityLayout {
   islands: CityIsland[];
   buildings: CityBuilding[];
@@ -262,6 +331,7 @@ export function layoutCity(extraction: Extraction): CityLayout {
     rows: number;
     testOnly: boolean;
     mustKeep: Set<string>;
+    assignments: { x: number; y: number }[] | null; // plot per file (arranged islands)
     px: number; // plot units, relaxed below
     py: number;
   }
@@ -281,14 +351,15 @@ export function layoutCity(extraction: Extraction): CityLayout {
       cursorY += shelfH + GAP_PLOTS;
       shelfH = 0;
     }
+    const assignments = testOnly ? null : arrangePlots(files.map((f) => f.building), cols, rows);
     const mustKeep = new Set<string>();
     files.forEach((f, i) => {
-      const lx = testOnly ? i % (cols * PLOT) : (i % cols) * PLOT;
-      const ly = testOnly ? Math.floor(i / (cols * PLOT)) % (rows * PLOT) : Math.floor(i / cols) * PLOT;
+      const lx = testOnly ? i % (cols * PLOT) : assignments![i].x * PLOT;
+      const ly = testOnly ? Math.floor(i / (cols * PLOT)) % (rows * PLOT) : assignments![i].y * PLOT;
       for (let dy = 0; dy < (testOnly ? 1 : PLOT); dy++)
         for (let dx = 0; dx < (testOnly ? 1 : PLOT); dx++) mustKeep.add(lx + dx + "," + (ly + dy));
     });
-    pending.push({ isl, files, cols, rows, testOnly, mustKeep, px: cursorX, py: cursorY });
+    pending.push({ isl, files, cols, rows, testOnly, mustKeep, assignments, px: cursorX, py: cursorY });
     cursorX += cols + GAP_PLOTS;
     shelfH = Math.max(shelfH, rows);
   }
@@ -334,10 +405,10 @@ export function layoutCity(extraction: Extraction): CityLayout {
     };
     placed.push(island);
     files.forEach((f, i) => {
-      const gx = testOnly ? x + (i % (cols * PLOT)) : x + (i % cols) * PLOT;
+      const gx = testOnly ? x + (i % (cols * PLOT)) : x + item.assignments![i].x * PLOT;
       const gy = testOnly
         ? y + (Math.floor(i / (cols * PLOT)) % (rows * PLOT))
-        : y + Math.floor(i / cols) * PLOT;
+        : y + item.assignments![i].y * PLOT;
       buildings.push({ file: f.path, islandId: isl.id, building: f.building, gx, gy });
       fileToIsland.set(f.path, isl.id);
       filePos.set(f.path, { gx, gy, islandId: isl.id });

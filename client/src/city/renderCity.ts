@@ -3,7 +3,7 @@ import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeSpan, cityBridgeDeck, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
+import { bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -401,7 +401,10 @@ export class CityView {
         items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
         continue;
       }
-      const key = BUILDING_SPRITE[b.building] ?? "cottage";
+      let key = BUILDING_SPRITE[b.building] ?? "cottage";
+      // Cottages vary: one in three takes the slate-roof sprite,
+      // by file hash, so a village is not one stamped house.
+      if (key === "cottage" && hashSeed(b.file) % 3 === 0) key = "slate";
       const sprite = this.world.sprites.find((s) => s.key === key) ?? this.world.sprites.find((s) => s.key === "cottage");
       const texture = this.tex(key);
       if (!sprite || !texture || !sprite.plate) continue;
