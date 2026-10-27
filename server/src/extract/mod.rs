@@ -235,7 +235,16 @@ fn collect_source_files(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
 }
 
 fn read_package_json(dir: &Path) -> Option<serde_json::Value> {
-    let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
+    let path = dir.join("package.json");
+    // Same containment rule as source files: a FIFO or symlink named
+    // package.json must not block or escape the repo.
+    let regular = path
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_file() && !m.file_type().is_symlink());
+    if !regular {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
 
