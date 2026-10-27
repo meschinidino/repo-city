@@ -34,6 +34,19 @@ async function jsonOrThrow(res: Response): Promise<unknown> {
   return res.json();
 }
 
+/**
+ * Failure text for the extraction load. A network failure (the
+ * server is down) and a server refusal (bad repo path) need
+ * different recovery instructions; mixing them up sends the user
+ * to restart a healthy server.
+ */
+export function loadFailureText(server: string, e: Error): string {
+  if (e instanceof TypeError) {
+    return `Could not reach the Repo City server at ${server} (${e.message}). Start it with: cargo run --bin repo-city-server-bin (in server/). Nothing was rendered from invented data.`;
+  }
+  return `The Repo City server refused to open that repo: ${e.message}. Fix the repo path and reload. Nothing was rendered from invented data.`;
+}
+
 export async function fetchExtraction(server: string, repo: string): Promise<Extraction> {
   const res = await fetch(`${server}/api/extraction?path=${encodeURIComponent(repo)}`);
   return (await jsonOrThrow(res)) as Extraction;

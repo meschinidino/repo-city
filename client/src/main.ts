@@ -5,7 +5,7 @@ import { occlusion } from "./map/placement";
 import { PASS } from "./map/checks";
 import { layoutCity } from "./city/layoutCity";
 import { CityView } from "./city/renderCity";
-import { connectEvents, createSession, fetchExtraction, fetchReport, stopSession } from "./city/live";
+import { connectEvents, createSession, fetchExtraction, fetchReport, loadFailureText, stopSession } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -72,7 +72,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   try {
     extraction = await fetchExtraction(server, repo);
   } catch (e) {
-    status.textContent = `Could not reach the Repo City server at ${server} (${(e as Error).message}). Start it with: cargo run --bin repo-city-server-bin (in server/). Nothing was rendered from invented data.`;
+    status.textContent = loadFailureText(server, e as Error);
     status.classList.add("fail");
     return;
   }
