@@ -18,7 +18,7 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use crate::events::{EventPayload, Outcome, Source, StoredEvent};
-use crate::store::Store;
+use crate::store::{Store, TransitionError};
 use crate::watch::RepoWatcher;
 
 pub struct AppState {
@@ -63,6 +63,31 @@ impl AppState {
         let event = self.store.append(session_id, source, payload)?;
         let _ = self.tx.send(event.clone());
         Ok(event)
+    }
+
+    /// Stop the watcher and kill the agent child of one session.
+    /// The caller sets the new state first, so no producer can log
+    /// after the move. Used by pause and stop; resume starts a
+    /// fresh watcher and, when a CLI session id is known, a fresh
+    /// `claude --resume` process.
+    async fn teardown_runtime(&self, session_id: &str) {
+        let watcher = self.watchers.lock().unwrap().remove(session_id);
+        if let Some(watcher) = watcher {
+            watcher.stop();
+        }
+        for _ in 0..50 {
+            if self.children.lock().unwrap().contains_key(session_id)
+                || !self.spawning.lock().unwrap().contains(session_id)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let mut child = self.children.lock().unwrap().remove(session_id);
+        if let Some(child) = child.as_mut() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
     }
 
     fn start_watcher(&self, session_id: &str, root: &std::path::Path) {
@@ -211,6 +236,10 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/events", get(session_events))
         .route("/api/sessions/{id}/report", get(session_report))
         .route("/api/sessions/{id}/stop", post(stop_session))
+        .route("/api/sessions/{id}/pause", post(pause_session))
+        .route("/api/sessions/{id}/resume", post(resume_session))
+        .route("/api/sessions/{id}/archive", post(archive_session))
+        .route("/api/sessions/{id}/follow-up", post(follow_up_session))
         .route("/ws", get(ws_handler))
         // Local single-user tool: only loopback pages (the Vite dev
         // client) may call this API from a browser. A permissive
@@ -314,6 +343,51 @@ async fn create_session(
         )
         .into_response();
     }
+    // Island lock (T5): one working or paused quest per island.
+    if let Some(island_id) = body.island_id.as_deref() {
+        match state
+            .store
+            .island_lock_holder(&body.repo_path, island_id, None)
+        {
+            Ok(Some(holder)) => {
+                return err(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "island {island_id} is held by session {} ({})",
+                        holder.id, holder.state
+                    ),
+                )
+                .into_response()
+            }
+            Ok(None) => {}
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        }
+    }
+    // Cap (D-cap): at most 3 running agent quests. Watcher-only
+    // sessions do not count; they run no agent.
+    if body.spawn {
+        match state.store.list_sessions() {
+            Ok(all) => {
+                let running: Vec<&crate::store::Session> = all
+                    .iter()
+                    .filter(|s| s.state == "working" && s.worktree_path.is_some())
+                    .collect();
+                if running.len() >= 3 {
+                    let names = running
+                        .iter()
+                        .map(|s| s.task.as_deref().unwrap_or(&s.id))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return err(
+                        StatusCode::CONFLICT,
+                        format!("3 quests are running ({names}); stop one first"),
+                    )
+                    .into_response();
+                }
+            }
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        }
+    }
     let session = match state.store.create_session(
         &body.repo_path,
         None,
@@ -323,6 +397,34 @@ async fn create_session(
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };
+    // A spawned agent works in its own git worktree (T5), never in
+    // the user's checkout. Shared dependencies stay read-only by
+    // construction: the worktree holds tracked files only, and no
+    // install step runs in the user's tree.
+    let mut run_root = root.clone();
+    if body.spawn {
+        let wt_root = root.join(".repo-city").join("worktrees");
+        match crate::worktree::create_worktree(&root, &wt_root, &session.id) {
+            Ok(path) => {
+                let _ = state
+                    .store
+                    .set_worktree_path(&session.id, &path.to_string_lossy());
+                run_root = path;
+            }
+            Err(e) => {
+                let _ = state.store.set_state(&session.id, "failed");
+                let _ = state.emit(
+                    &session.id,
+                    Source::System,
+                    EventPayload::SessionFinished {
+                        outcome: Outcome::Failed,
+                        reason: Some(format!("could not create worktree: {e}")),
+                    },
+                );
+                return err(StatusCode::BAD_REQUEST, e).into_response();
+            }
+        }
+    }
     if let Err(e) = state.emit(
         &session.id,
         Source::System,
@@ -332,10 +434,10 @@ async fn create_session(
     ) {
         return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
     }
-    state.start_watcher(&session.id, &root);
+    state.start_watcher(&session.id, &run_root);
     if body.spawn {
         if let Some(task) = body.task.clone() {
-            spawn_claude(state.clone(), session.id.clone(), root, task);
+            spawn_claude(state.clone(), session.id.clone(), run_root, task, None);
         }
     }
     (
@@ -348,22 +450,35 @@ async fn create_session(
 /// Run the Claude adapter for one session. Permission handling here
 /// is the spike default (`acceptEdits` inside the session repo);
 /// T8 owns the permission bridge and may tighten this.
-fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: String) {
+fn spawn_claude(
+    state: Arc<AppState>,
+    session_id: String,
+    cwd: PathBuf,
+    task: String,
+    resume_cli_id: Option<String>,
+) {
     // Marked synchronously so a /stop racing the spawn can wait for
     // the child to register instead of missing it entirely.
     state.spawning.lock().unwrap().insert(session_id.clone());
     tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut args: Vec<String> = vec![
+            "-p".into(),
+            task.clone(),
+            "--output-format".into(),
+            "stream-json".into(),
+            "--verbose".into(),
+            "--permission-mode".into(),
+            "acceptEdits".into(),
+        ];
+        // Resume by CLI session id (T5): pause killed the process;
+        // the conversation continues under the same CLI id.
+        if let Some(cli_id) = &resume_cli_id {
+            args.push("--resume".into());
+            args.push(cli_id.clone());
+        }
         let mut child = match tokio::process::Command::new("claude")
-            .args([
-                "-p",
-                &task,
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--permission-mode",
-                "acceptEdits",
-            ])
+            .args(&args)
             .current_dir(&cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -596,38 +711,17 @@ async fn stop_session(
         )
         .into_response();
     }
-    match state.store.get_session(&id) {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response()
-        }
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    }
     // State first: the CLI reader checks it before logging anything
-    // more, so nothing can land after the stopped event.
-    let _ = state.store.set_state(&id, "stopped");
-    // Take the watcher out first so the mutex is not held while its
-    // thread joins, then kill the agent so it cannot keep editing
-    // unwatched after the stop.
-    let watcher = state.watchers.lock().unwrap().remove(&id);
-    if let Some(watcher) = watcher {
-        watcher.stop();
+    // more, so nothing can land after the stopped event. A session
+    // that already ended cannot stop again.
+    match state
+        .store
+        .transition_state(&id, &["working", "paused"], "stopped")
+    {
+        Ok(_) => {}
+        Err(e) => return transition_err(e).into_response(),
     }
-    // If the agent spawn is still in flight, wait briefly for the
-    // child to register so it can be killed rather than orphaned.
-    for _ in 0..50 {
-        if state.children.lock().unwrap().contains_key(&id)
-            || !state.spawning.lock().unwrap().contains(&id)
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let mut child = state.children.lock().unwrap().remove(&id);
-    if let Some(child) = child.as_mut() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
+    state.teardown_runtime(&id).await;
     match state.emit(
         &id,
         Source::System,
@@ -639,6 +733,146 @@ async fn stop_session(
         Ok(event) => (StatusCode::OK, Json(serde_json::to_value(event).unwrap())).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
+}
+
+fn transition_err(e: TransitionError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match e {
+        TransitionError::NotFound => StatusCode::NOT_FOUND,
+        TransitionError::BadMove { .. } => StatusCode::CONFLICT,
+        TransitionError::Other(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    err(status, e.to_string())
+}
+
+fn session_json(session: &crate::store::Session) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(session).unwrap()),
+    )
+        .into_response()
+}
+
+/// Pause (T5): working -> paused. The process dies; the CLI
+/// session id and the worktree keep the work. No finish event:
+/// the quest is not done.
+async fn pause_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let session = match state.store.transition_state(&id, &["working"], "paused") {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    state.teardown_runtime(&id).await;
+    let _ = state.emit(&id, Source::System, EventPayload::AgentMessage { text: "Session paused.".to_string() });
+    session_json(&session).into_response()
+}
+
+/// Resume (T5): paused -> working. The watcher restarts on the
+/// worktree, and a known CLI session id respawns with `--resume`.
+/// A stopped or finished session cannot resume: it is not paused.
+async fn resume_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    if let Ok(Some(session)) = state.store.get_session(&id) {
+        if let Some(island_id) = session.island_id.as_deref() {
+            if let Ok(Some(holder)) =
+                state.store.island_lock_holder(&session.repo_path, island_id, Some(&id))
+            {
+                return err(StatusCode::CONFLICT, format!("island {island_id} is held by session {}", holder.id)).into_response();
+            }
+        }
+    }
+    let session = match state.store.transition_state(&id, &["paused"], "working") {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let root = PathBuf::from(session.worktree_path.as_deref().unwrap_or(&session.repo_path));
+    let _ = state.emit(&id, Source::System, EventPayload::SessionStarted { cli_session_id: session.cli_session_id.clone() });
+    state.start_watcher(&id, &root);
+    if let (Some(cli_id), Some(task)) = (session.cli_session_id.clone(), session.task.clone()) {
+        spawn_claude(state.clone(), id.clone(), root, format!("Continue this task: {task}"), Some(cli_id));
+    }
+    session_json(&session).into_response()
+}
+
+/// Archive (T5): a finished, failed, or stopped quest leaves the
+/// active list. Its events and report stay in the store.
+async fn archive_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let session = match state
+        .store
+        .transition_state(&id, &["finished", "failed", "stopped"], "archived")
+    {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let _ = state.emit(&id, Source::System, EventPayload::AgentMessage { text: "Session archived.".to_string() });
+    session_json(&session).into_response()
+}
+
+#[derive(Deserialize)]
+struct FollowUp {
+    task: String,
+}
+
+/// Follow-up (T5): a finished or failed quest gets a new task in
+/// the same CLI conversation and the same worktree. Without a CLI
+/// session id there is no conversation to continue: honest 409.
+async fn follow_up_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<FollowUp>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    if body.task.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "task is empty".to_string()).into_response();
+    }
+    let before = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    let Some(cli_id) = before.cli_session_id.clone() else {
+        return err(StatusCode::CONFLICT, "session has no CLI session to continue".to_string()).into_response();
+    };
+    if let Some(island_id) = before.island_id.as_deref() {
+        if let Ok(Some(holder)) = state.store.island_lock_holder(&before.repo_path, island_id, Some(&id)) {
+            return err(StatusCode::CONFLICT, format!("island {island_id} is held by session {}", holder.id)).into_response();
+        }
+    }
+    let session = match state
+        .store
+        .transition_state(&id, &["finished", "failed"], "working")
+    {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let _ = state.store.set_task(&id, &body.task);
+    let root = PathBuf::from(session.worktree_path.as_deref().unwrap_or(&session.repo_path));
+    let _ = state.emit(&id, Source::System, EventPayload::SessionStarted { cli_session_id: Some(cli_id.clone()) });
+    state.start_watcher(&id, &root);
+    spawn_claude(state.clone(), id.clone(), root, body.task.clone(), Some(cli_id));
+    let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
+    session_json(&updated).into_response()
 }
 
 #[derive(Deserialize)]

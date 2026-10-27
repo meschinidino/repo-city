@@ -31,6 +31,27 @@ pub struct Store {
     secrets: Vec<String>,
 }
 
+/// Why a state move did not happen. Not found maps to HTTP 404;
+/// a bad move maps to HTTP 409.
+#[derive(Debug, PartialEq)]
+pub enum TransitionError {
+    NotFound,
+    BadMove { from: String, to: String },
+    Other(String),
+}
+
+impl std::fmt::Display for TransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransitionError::NotFound => write!(f, "session not found"),
+            TransitionError::BadMove { from, to } => {
+                write!(f, "session is {from}; it cannot move to {to}")
+            }
+            TransitionError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 fn payload_json(payload: &EventPayload) -> Result<String, String> {
     serde_json::to_string(payload).map_err(|e| e.to_string())
 }
@@ -166,6 +187,73 @@ impl Store {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    pub fn set_worktree_path(&self, id: &str, path: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE sessions SET worktree_path = ?2, updated_ms = ?3 WHERE id = ?1",
+            params![id, path, crate::events::now_ms()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn set_task(&self, id: &str, task: &str) -> Result<(), String> {
+        let task = redact::redact_text(task, &self.secrets);
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE sessions SET task = ?2, updated_ms = ?3 WHERE id = ?1",
+            params![id, task, crate::events::now_ms()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Move a session to `to` only from one of `allowed_from`.
+    /// A bad move is an error, never a silent no-op: the client
+    /// must not show a state the server did not take.
+    pub fn transition_state(
+        &self,
+        id: &str,
+        allowed_from: &[&str],
+        to: &str,
+    ) -> Result<Session, TransitionError> {
+        let session = self
+            .get_session(id)
+            .map_err(TransitionError::Other)?
+            .ok_or(TransitionError::NotFound)?;
+        if !allowed_from.contains(&session.state.as_str()) {
+            return Err(TransitionError::BadMove {
+                from: session.state,
+                to: to.to_string(),
+            });
+        }
+        self.set_state(id, to).map_err(TransitionError::Other)?;
+        self.get_session(id)
+            .map_err(TransitionError::Other)?
+            .ok_or(TransitionError::NotFound)
+    }
+
+    /// The working or paused session that holds the lock on one
+    /// island of one repo, if any. Paused holds the lock: resume
+    /// must be able to take its island back. Terminal states and
+    /// archived release it. `exclude_id` skips the caller itself.
+    pub fn island_lock_holder(
+        &self,
+        repo_path: &str,
+        island_id: &str,
+        exclude_id: Option<&str>,
+    ) -> Result<Option<Session>, String> {
+        Ok(self
+            .list_sessions()?
+            .into_iter()
+            .find(|s| {
+                s.repo_path == repo_path
+                    && s.island_id.as_deref() == Some(island_id)
+                    && (s.state == "working" || s.state == "paused")
+                    && Some(s.id.as_str()) != exclude_id
+            }))
     }
 
     pub fn set_cli_session_id(&self, id: &str, cli_session_id: &str) -> Result<(), String> {
@@ -385,6 +473,56 @@ mod tests {
         );
         let got = store.get_session(&s.id).unwrap().unwrap();
         assert_eq!(got.task, s.task);
+    }
+
+    #[test]
+    fn transitions_allow_good_moves_and_reject_bad_ones() {
+        let (store, s) = store_with_session();
+        let paused = store
+            .transition_state(&s.id, &["working"], "paused")
+            .unwrap();
+        assert_eq!(paused.state, "paused");
+        // Paused cannot pause again, and cannot archive.
+        assert_eq!(
+            store.transition_state(&s.id, &["working"], "paused"),
+            Err(TransitionError::BadMove {
+                from: "paused".into(),
+                to: "paused".into()
+            })
+        );
+        assert!(matches!(
+            store.transition_state(&s.id, &["finished", "failed", "stopped"], "archived"),
+            Err(TransitionError::BadMove { .. })
+        ));
+        let working = store
+            .transition_state(&s.id, &["paused"], "working")
+            .unwrap();
+        assert_eq!(working.state, "working");
+        assert_eq!(
+            store.transition_state("no-such-id", &["working"], "paused"),
+            Err(TransitionError::NotFound)
+        );
+    }
+
+    #[test]
+    fn island_lock_is_held_by_working_and_paused_only() {
+        let (store, s) = store_with_session();
+        let holder = store
+            .island_lock_holder("/repo", "api", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(holder.id, s.id);
+        // The holder does not block itself.
+        assert!(store
+            .island_lock_holder("/repo", "api", Some(&s.id))
+            .unwrap()
+            .is_none());
+        store.set_state(&s.id, "paused").unwrap();
+        assert!(store.island_lock_holder("/repo", "api", None).unwrap().is_some());
+        store.set_state(&s.id, "stopped").unwrap();
+        assert!(store.island_lock_holder("/repo", "api", None).unwrap().is_none());
+        // A different island or repo is a different lock.
+        assert!(store.island_lock_holder("/repo", "web", None).unwrap().is_none());
     }
 
     #[test]
