@@ -233,8 +233,8 @@ export function bridgeChevron(
   const len = Math.hypot(b.gx - a.gx, b.gy - a.gy);
   const ux = (b.gx - a.gx) / len;
   const uy = (b.gy - a.gy) / len;
-  const cx = a.gx + (b.gx - a.gx) * 0.88;
-  const cy = a.gy + (b.gy - a.gy) * 0.88;
+  const cx = a.gx + (b.gx - a.gx) * 0.72;
+  const cy = a.gy + (b.gy - a.gy) * 0.72;
   return {
     tip: { gx: cx + ux * 0.45, gy: cy + uy * 0.45 },
     wingA: { gx: cx - ux * 0.3 + deck.perp.gx * 0.8, gy: cy - uy * 0.3 + deck.perp.gy * 0.8 },

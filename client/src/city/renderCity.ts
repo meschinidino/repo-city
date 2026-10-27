@@ -286,6 +286,8 @@ export class CityView {
             first = false;
           } else bridges.lineTo(p[0], p[1]);
         }
+        const end = at(1, v, 0.1);
+        bridges.lineTo(end[0], end[1]);
         bridges.stroke({ color: 0xd9c08c, width: Math.max(1, TW / 80) });
       }
       for (const dir of pair.dirs) {
