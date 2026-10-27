@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bridgeSpan, layoutCity, PLOT } from "./layoutCity";
+import { bridgeDeck, bridgeSpan, layoutCity, PLOT, plotDepth } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -156,5 +156,22 @@ describe("bridgeSpan directions and degenerate cases", () => {
   });
   it("an island to itself has no span", () => {
     expect(bridgeSpan(a, a)).toBeNull();
+  });
+});
+
+describe("plotDepth and bridgeDeck (user feedback 2026-10-27)", () => {
+  it("building depth beats every ground tile on its own plot", () => {
+    // Ground tiles draw at gx+gy; a building must sort after the
+    // front row of its 2x2 plot or short sprites sink under it.
+    expect(plotDepth(4, 6)).toBeGreaterThan(4 + 1 + (6 + 1));
+    expect(plotDepth(4, 6)).toBe(4 + PLOT - 1 + (6 + PLOT - 1) + 0.6);
+  });
+  it("deck corners sit one half-width off the span axis", () => {
+    const deck = bridgeDeck([{ gx: 0, gy: 0 }, { gx: 10, gy: 0 }], 3);
+    expect(deck.len).toBe(10);
+    const [c0, , c2] = deck.corners;
+    expect(Math.abs(c0.gy)).toBeCloseTo(Math.hypot(deck.perp.gx, deck.perp.gy), 6);
+    expect(c2.gy).toBeCloseTo(-c0.gy, 6);
+    expect(bridgeDeck([{ gx: 0, gy: 0 }, { gx: 10, gy: 0 }], 128).perp.gy).toBeGreaterThan(deck.perp.gy);
   });
 });

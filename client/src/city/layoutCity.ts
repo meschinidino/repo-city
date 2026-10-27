@@ -119,6 +119,16 @@ export function layoutCity(extraction: Extraction): CityLayout {
   };
 }
 
+/**
+ * Draw depth of a building on a plot: the plot's FRONT corner plus
+ * the same 0.6 the test map uses (map/placement.ts). Using the back
+ * corner buries short buildings (markets) under the tile rows in
+ * front of them.
+ */
+export function plotDepth(gx: number, gy: number): number {
+  return gx + PLOT - 1 + (gy + PLOT - 1) + 0.6;
+}
+
 export interface GridRect {
   x: number;
   y: number;
@@ -166,6 +176,40 @@ export function bridgeSpan(a: GridRect, b: GridRect): [{ gx: number; gy: number 
     { gx: ax + dx * exitA, gy: ay + dy * exitA },
     { gx: ax + dx * enterB, gy: ay + dy * enterB },
   ];
+}
+
+export interface BridgeDeck {
+  len: number; // grid cells along the span
+  a: { gx: number; gy: number };
+  b: { gx: number; gy: number };
+  perp: { gx: number; gy: number }; // half-width offset, grid cells
+  corners: [{ gx: number; gy: number }, { gx: number; gy: number }, { gx: number; gy: number }, { gx: number; gy: number }];
+}
+
+/** Deck geometry for a shore-to-shore span: corners in grid space,
+ * half width growing slowly with the import count. */
+export function bridgeDeck(
+  span: [{ gx: number; gy: number }, { gx: number; gy: number }],
+  count: number,
+): BridgeDeck {
+  const [a, b] = span;
+  const dx = b.gx - a.gx;
+  const dy = b.gy - a.gy;
+  const len = Math.hypot(dx, dy);
+  const hw = Math.min(0.26, 0.13 + 0.03 * Math.log2(count + 1));
+  const perp = { gx: (-dy / len) * hw, gy: (dx / len) * hw };
+  return {
+    len,
+    a,
+    b,
+    perp,
+    corners: [
+      { gx: a.gx - perp.gx, gy: a.gy - perp.gy },
+      { gx: b.gx - perp.gx, gy: b.gy - perp.gy },
+      { gx: b.gx + perp.gx, gy: b.gy + perp.gy },
+      { gx: a.gx + perp.gx, gy: a.gy + perp.gy },
+    ],
+  };
 }
 
 /** Isometric projection for a city of any size (same math as the test map). */
