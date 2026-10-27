@@ -47,8 +47,11 @@ impl AppState {
     ) -> Result<StoredEvent, String> {
         // A stopped/finished session logs nothing more from the CLI
         // or the watcher: racing producers are dropped here, at the
-        // single entry point, not trusted to check first. System
-        // events (the stop itself, lifecycle bookkeeping) still land.
+        // single entry point. The state check runs under the emit
+        // lock so it cannot race the stop path's state write plus
+        // stopped-event append. System events (the stop itself,
+        // lifecycle bookkeeping) still land.
+        let _guard = self.emit_lock.lock().unwrap();
         if source != Source::System {
             match self.store.get_session(session_id) {
                 Ok(Some(s)) if s.state == "working" => {}
@@ -57,7 +60,6 @@ impl AppState {
                 Err(e) => return Err(e),
             }
         }
-        let _guard = self.emit_lock.lock().unwrap();
         let event = self.store.append(session_id, source, payload)?;
         let _ = self.tx.send(event.clone());
         Ok(event)
@@ -70,13 +72,13 @@ impl AppState {
         let emit_lock = self.emit_lock.clone();
         let sid = session_id.to_string();
         match RepoWatcher::spawn(root, self.debounce, move |payload| {
-            // Same gate as AppState::emit: a stopped session logs
-            // nothing more from the watcher.
+            // Same gate as AppState::emit, checked under the lock:
+            // a stopped session logs nothing more from the watcher.
+            let _guard = emit_lock.lock().unwrap();
             match store.get_session(&sid) {
                 Ok(Some(s)) if s.state == "working" => {}
                 _ => return,
             }
-            let _guard = emit_lock.lock().unwrap();
             if let Ok(event) = store.append(&sid, Source::Watcher, payload) {
                 let _ = tx.send(event);
             }
@@ -156,13 +158,14 @@ impl AppState {
                         let key = format!("{}:{:?}", c.path, c.change);
                         current.insert(key.clone());
                         if seen.insert(key) {
-                            // Rechecked at append time: the session
-                            // may have stopped during the git call.
+                            // Rechecked under the lock at append time:
+                            // the session may have stopped during the
+                            // git call.
+                            let _guard = emit_lock.lock().unwrap();
                             match store.get_session(&sid) {
                                 Ok(Some(s)) if s.state == "working" => {}
                                 _ => continue,
                             }
-                            let _guard = emit_lock.lock().unwrap();
                             if let Ok(event) = store.append(
                                 &sid,
                                 Source::Watcher,
