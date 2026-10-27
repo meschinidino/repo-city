@@ -9,7 +9,7 @@ Repo City manages AI coding-agent sessions for one TypeScript/JavaScript repo, r
 ## Read first, in this order
 
 1. [notes/working-notes.md](notes/working-notes.md): where the plan lives, binding decisions, gates, honesty rules.
-2. [ROADMAP.md](ROADMAP.md): steps in order; step 1 is done.
+2. [ROADMAP.md](ROADMAP.md): steps in order; step 1 is done. Lines marked **▸ gstack** name the gstack skill to run at that point (for example `/review` before every merge, `/qa` at each journey, `/plan-design-review` before the command bar). Run them when you reach that point, and say in your report which ones you ran.
 3. [specs/design.md](specs/design.md): the approved design, committed contracts, decision ledger D1–D23, tasks T1–T12. Its decisions are binding; don't re-open them without the user.
 4. [DESIGN.md](DESIGN.md) before any visual or UI work: world model, building types, tokens, layout, motion, and the sprite pipeline rules and checks.
 5. [specs/test-plan.md](specs/test-plan.md) before writing tests.
