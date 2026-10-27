@@ -8,7 +8,7 @@ Scope amendment (2026-10-26): single-package repos and Python extraction. The av
 
 T11: sprite pipeline ported from the prototype into the client.
 
-### Added
+### Added — client (T11)
 - `client/`: Vite + TypeScript + PixiJS client scaffold (Vitest for tests). Run it with `npm --prefix client run dev`; `?full=1` renders at 200 px per tile.
 - `client/src/map/`: the pipeline as small pure functions — magenta and cyan keying, cut-out by connected shape, plate measurement and footprint choice, tile fitting, coast autotiling, occupancy layout with trees, code-drawn bridges and lanes — plus the Pixi renderer for the same three-island test map. Sheets load from `assets/sprites/`.
 - `client/src/map/pipeline.test.ts`: every check from the prototype's checks table as a Vitest test against the committed sheets, at the pass levels in `DESIGN.md`. The same fail-level checks gate the render at load in the client.
@@ -16,6 +16,33 @@ T11: sprite pipeline ported from the prototype into the client.
 
 ### Changed
 - Tile fitting now straightens tile edges after the affine warp (per-column shift by the smoothed residual to the exact diamond). Measured on the committed sheets: the prototype's pre-fit edge error reproduces at 1.394% of tile width; the fitted tiles measure 0.25% worst, under the 1% target in `DESIGN.md`. Both numbers print in the test run.
+
+Roadmap step 2, task T2: the Oxc extraction spike. First application code, tested first with a stand-in fixture; T13 (scope amendment above) later ran extraction on the real repo.
+
+### Added — server (T2)
+- `server/`: Cargo project (`repo-city-server`) with the extraction library in `server/src/extract/` and a `repo-city-extract` CLI. It scans a TS/JS repo with `oxc_parser` / `oxc_resolver` and outputs a client-readable JSON summary (`schema_version` 1): directory-first islands (workspace packages, or top-level directories without a workspace), import bridges counted per island pair, per-file roles/building types from DESIGN.md (keep, sea gate, silos, lighthouse, market, containers, ruin, cottage), and parsed/resolved/unresolved import counts with unresolved specifiers and parse errors listed.
+- `server/tests/fixtures/sample-monorepo/`: small stand-in TS monorepo fixture (4 packages, 12 files), labeled a stand-in in its README, in test names, and in the JSON output (`is_stand_in_fixture`). Hand-counted expectations: 16 imports, 14 resolved, 2 unresolved, bridges api->shared 3, web->shared 3, cli->shared 1, cli->api 1.
+- `server/tests/extraction_fixture.rs` plus unit tests: `cargo test` checks the counts, islands, bridges, roles, JSON shape, the directory-first fallback, and the empty-repo case (11 tests). `cargo clippy --all-targets -- -D warnings` is clean.
+
+### Changed
+- `specs/design.md` (and its canonical `~/.gstack` copy): T2 checkbox marked done.
+- `VERSION` bumped to 0.2.0.
+
+### Known gaps
+- Workspace glob shapes beyond `packages/*`, external `node_modules` dependencies, dynamic `import()`, and scale (~2,000 files) remain unmeasured (T13 measured GestiKo at 600 files).
+- No Axum server yet; adapters (T3) and the permission bridge (T8) still wait for the T1 rule check.
+
+## [0.1.3] - 2026-10-26
+
+Roadmap now says what to do next and which gstack skill to run where. No application code yet.
+
+### Changed
+- `ROADMAP.md`:
+  - New "every working session and every change" loop: `/context-restore` and `/context-save`, `/review` before every merge, `/ship` to cut a release, `/investigate`, `/careful`.
+  - **▸ gstack** reminders at each step: `/cso` on the permission bridge, `/qa` and `/design-review` at the day-3 gate, `/plan-design-review` before the command bar, `/design-shotgun` and `/design-html` for its mocks (with the OpenAI API key caveat and the Codex fallback), `/qa` on finish, failure and drag journeys, `/benchmark` and `/health` in performance, `/devex-review`, `/design-review`, `/qa-only` and `/document-release` before submission, `/retro` after.
+  - New items: setup tasks for Dino (trust the folder in Muse, get the friend's repo, confirm team size and spike owners); asking Discord whether building with Muse Code counts; T2 and T11 marked as startable now, T3 and T8 after T1; recorded event fixtures for the parallel client lane; the eval harness for naming, reports and building types; the 3-minute demo script drafted at step 4; the X post and gallery for the bonus prizes.
+- `AGENTS.md`: tells agents to run the **▸ gstack** skills when they reach them and to report which ones they ran.
+- `README.md`: version 0.1.3.
 
 ## [0.1.2] - 2026-10-26
 
