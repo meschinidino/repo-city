@@ -65,15 +65,29 @@ fn unavailable(reason: String) -> DiffReport {
 /// Report on uncommitted plus committed-vs-HEAD changes in `root`.
 /// Untracked files appear with 0/0 line counts and are named as new.
 pub fn diff_report(root: &Path) -> DiffReport {
-    let numstat = match git(root, &["diff", "--numstat", "HEAD"]) {
+    // -z on both git calls so paths with spaces or non-ASCII bytes
+    // arrive unquoted and match between numstat and status.
+    let numstat = match git(root, &["diff", "--numstat", "-z", "HEAD"]) {
         Ok(s) => s,
         Err(e) => return unavailable(format!("git diff failed: {e}")),
     };
     let mut files: Vec<FileDiff> = Vec::new();
-    for line in numstat.lines() {
-        let mut parts = line.split('\t');
+    // Entries are NUL-separated "ins<TAB>del<TAB>path"; a rename has
+    // an empty path field followed by the original and new paths.
+    let mut entries = numstat.split('\0').peekable();
+    while let Some(entry) = entries.next() {
+        let mut parts = entry.split('\t');
         let (Some(ins), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
             continue;
+        };
+        let path = if path.is_empty() {
+            let _ = entries.next(); // original path of the rename
+            match entries.next() {
+                Some(p) => p,
+                None => continue,
+            }
+        } else {
+            path
         };
         let binary = ins == "-" && del == "-";
         files.push(FileDiff {
@@ -210,6 +224,11 @@ mod tests {
         std::fs::write(root.join("staged.txt"), "one\n").unwrap();
         git(root, &["add", "staged.txt"]);
         std::fs::write(root.join("staged.txt"), "one\ntwo\n").unwrap();
+        // Non-ASCII staged-new path: quoted by git without -z, so
+        // the two parses only agree because both now use -z.
+        std::fs::write(root.join("café.txt"), "un\n").unwrap();
+        git(root, &["add", "café.txt"]);
+        std::fs::write(root.join("café.txt"), "un\ndeux\n").unwrap();
 
         let report = diff_report(root);
         assert!(report.available);
@@ -232,13 +251,19 @@ mod tests {
             "files: {:?}",
             report.files
         );
+        let cafe = report.files.iter().find(|f| f.path == "café.txt").unwrap();
         assert!(
-            report.summary.contains("New files: fresh.txt"),
-            "{}",
-            report.summary
+            cafe.new_file && cafe.insertions == 2,
+            "files: {:?}",
+            report.files
         );
         assert!(
-            !report.summary.contains("New files: img.bin"),
+            report.summary.contains("New files:")
+                && report.summary.contains("fresh.txt")
+                && report.summary.contains("staged.txt")
+                && report.summary.contains("café.txt")
+                && !report.summary.contains("img.bin,")
+                && !report.summary.contains("New files: img.bin"),
             "{}",
             report.summary
         );
