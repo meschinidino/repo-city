@@ -149,12 +149,11 @@ export interface CityLayout {
 
 
 /**
- * Deterministic placement relaxation (plot units). Each round,
- * an island steps 12% toward the import-weighted centre of its
- * neighbours, blended toward the map centroid in proportion to
- * its share of the strongest island's connection weight, plus a
- * fixed seeded jitter. Rectangle overlaps (with the standard
- * gap) are pushed apart along the smaller penetration axis.
+ * Greedy hub placement (plot units). Islands are placed
+ * strongest first: the most-connected island takes the centre,
+ * and each next island takes the best-scoring free spot on
+ * expanding rings around the import-weighted centre of the
+ * islands already placed. Seeded jitter per island. No overlaps.
  */
 export function relaxPlacement(
   items: { isl: { id: string }; cols: number; rows: number; px: number; py: number }[],
@@ -294,13 +293,11 @@ export function layoutCity(extraction: Extraction): CityLayout {
     shelfH = Math.max(shelfH, rows);
   }
 
-  // Smarter placement (owner, 2026-10-27): shelf packing is only
-  // the start. A deterministic relaxation then pulls each island
-  // toward the import-weighted centre of its neighbours, and the
-  // most-connected islands toward the middle of the map, so hubs
-  // sit in the centre and the rest settle around them. Seeded
-  // jitter keeps it from looking stamped. Overlaps are pushed
-  // apart every round; nothing here is random per load.
+  // Smarter placement (owner, 2026-10-27): shelf packing gives
+  // the start positions only. Greedy hub placement then puts the
+  // most-connected island in the centre and settles the rest
+  // around the islands they connect to, with seeded jitter.
+  // Nothing here is random per load.
   relaxPlacement(pending, extraction.bridges);
 
   for (const item of pending) {
