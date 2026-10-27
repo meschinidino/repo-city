@@ -343,67 +343,31 @@ async fn create_session(
         )
         .into_response();
     }
-    // Island lock (T5): one working or paused quest per island.
-    if let Some(island_id) = body.island_id.as_deref() {
-        match state
-            .store
-            .island_lock_holder(&body.repo_path, island_id, None)
-        {
-            Ok(Some(holder)) => {
-                return err(
-                    StatusCode::CONFLICT,
-                    format!(
-                        "island {island_id} is held by session {} ({})",
-                        holder.id, holder.state
-                    ),
-                )
-                .into_response()
-            }
-            Ok(None) => {}
-            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-        }
-    }
-    // Cap (D-cap): at most 3 running agent quests. Watcher-only
-    // sessions do not count; they run no agent.
-    if body.spawn {
-        match state.store.list_sessions() {
-            Ok(all) => {
-                let running: Vec<&crate::store::Session> = all
-                    .iter()
-                    .filter(|s| s.state == "working" && s.worktree_path.is_some())
-                    .collect();
-                if running.len() >= 3 {
-                    let names = running
-                        .iter()
-                        .map(|s| s.task.as_deref().unwrap_or(&s.id))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return err(
-                        StatusCode::CONFLICT,
-                        format!("3 quests are running ({names}); stop one first"),
-                    )
-                    .into_response();
-                }
-            }
-            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-        }
-    }
-    let session = match state.store.create_session(
+    // Island lock and the 3-quest cap are checked in the same
+    // store lock as the insert (create_session_guarded).
+    let session = match state.store.create_session_guarded(
         &body.repo_path,
-        None,
         body.island_id.as_deref(),
         body.task.as_deref(),
+        body.spawn,
     ) {
         Ok(s) => s,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e @ crate::store::CreateError::IslandLocked { .. })
+        | Err(e @ crate::store::CreateError::CapReached) => {
+            return err(StatusCode::CONFLICT, e.to_string()).into_response()
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
     // A spawned agent works in its own git worktree (T5), never in
-    // the user's checkout. Shared dependencies stay read-only by
-    // construction: the worktree holds tracked files only, and no
-    // install step runs in the user's tree.
+    // the user's checkout. The worktree lives outside the checkout
+    // (system temp), so it does not pollute the user's git status
+    // or a watcher-only session on the same repo. Shared
+    // dependencies stay read-only by construction: the worktree
+    // holds tracked files only, and no install step runs in the
+    // user's tree.
     let mut run_root = root.clone();
     if body.spawn {
-        let wt_root = root.join(".repo-city").join("worktrees");
+        let wt_root = std::env::temp_dir().join("repo-city-worktrees");
         match crate::worktree::create_worktree(&root, &wt_root, &session.id) {
             Ok(path) => {
                 let _ = state
@@ -523,7 +487,7 @@ fn spawn_claude(
                 .get_session(&session_id)
                 .ok()
                 .flatten()
-                .is_some_and(|s| s.state == "stopped")
+                .is_some_and(|s| s.state != "working")
             {
                 break;
             }
@@ -560,7 +524,7 @@ fn spawn_claude(
                         .get_session(&session_id)
                         .ok()
                         .flatten()
-                        .is_some_and(|s| s.state == "stopped")
+                        .is_some_and(|s| s.state != "working")
                 {
                     continue;
                 }
@@ -576,7 +540,7 @@ fn spawn_claude(
                 .get_session(&session_id)
                 .ok()
                 .flatten()
-                .is_some_and(|s| s.state == "stopped");
+                .is_some_and(|s| s.state != "working");
         let status = match child.as_mut() {
             Some(c) => c.wait().await.map_err(|e| e.to_string()),
             None => Err("child already reaped".to_string()),
@@ -589,7 +553,7 @@ fn spawn_claude(
             .get_session(&session_id)
             .ok()
             .flatten()
-            .is_some_and(|s| s.state == "stopped");
+            .is_some_and(|s| s.state != "working");
         if stopped_externally || stopped_during_wait {
             return;
         }
@@ -735,6 +699,28 @@ async fn stop_session(
     }
 }
 
+/// At most 3 running spawned quests (D-cap). Resume and
+/// follow-up re-enter `working`, so they check the cap too.
+fn cap_reached(state: &AppState, exclude_id: &str) -> Option<String> {
+    let all = state.store.list_sessions().ok()?;
+    let running: Vec<&crate::store::Session> = all
+        .iter()
+        .filter(|s| {
+            s.state == "working" && s.worktree_path.is_some() && s.id != exclude_id
+        })
+        .collect();
+    if running.len() >= 3 {
+        let names = running
+            .iter()
+            .map(|s| s.task.as_deref().unwrap_or(&s.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!("3 quests are running ({names}); stop one first"))
+    } else {
+        None
+    }
+}
+
 fn transition_err(e: TransitionError) -> (StatusCode, Json<serde_json::Value>) {
     let status = match e {
         TransitionError::NotFound => StatusCode::NOT_FOUND,
@@ -792,6 +778,9 @@ async fn resume_session(
             }
         }
     }
+    if let Some(msg) = cap_reached(&state, &id) {
+        return err(StatusCode::CONFLICT, msg).into_response();
+    }
     let session = match state.store.transition_state(&id, &["paused"], "working") {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -799,8 +788,22 @@ async fn resume_session(
     let root = PathBuf::from(session.worktree_path.as_deref().unwrap_or(&session.repo_path));
     let _ = state.emit(&id, Source::System, EventPayload::SessionStarted { cli_session_id: session.cli_session_id.clone() });
     state.start_watcher(&id, &root);
-    if let (Some(cli_id), Some(task)) = (session.cli_session_id.clone(), session.task.clone()) {
-        spawn_claude(state.clone(), id.clone(), root, format!("Continue this task: {task}"), Some(cli_id));
+    // With a CLI id, resume the conversation. Without one (paused
+    // before the CLI init line), a spawned session starts fresh on
+    // its task instead of sitting in `working` with no agent.
+    if let Some(task) = session.task.clone() {
+        if session.worktree_path.is_some() {
+            match session.cli_session_id.clone() {
+                Some(cli_id) => spawn_claude(
+                    state.clone(),
+                    id.clone(),
+                    root,
+                    format!("Continue this task: {task}"),
+                    Some(cli_id),
+                ),
+                None => spawn_claude(state.clone(), id.clone(), root, task, None),
+            }
+        }
     }
     session_json(&session).into_response()
 }
@@ -858,6 +861,9 @@ async fn follow_up_session(
         if let Ok(Some(holder)) = state.store.island_lock_holder(&before.repo_path, island_id, Some(&id)) {
             return err(StatusCode::CONFLICT, format!("island {island_id} is held by session {}", holder.id)).into_response();
         }
+    }
+    if let Some(msg) = cap_reached(&state, &id) {
+        return err(StatusCode::CONFLICT, msg).into_response();
     }
     let session = match state
         .store

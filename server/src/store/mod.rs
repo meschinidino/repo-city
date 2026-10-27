@@ -40,6 +40,26 @@ pub enum TransitionError {
     Other(String),
 }
 
+/// Why a guarded create did not happen.
+#[derive(Debug, PartialEq)]
+pub enum CreateError {
+    IslandLocked { holder_id: String, holder_state: String },
+    CapReached,
+    Other(String),
+}
+
+impl std::fmt::Display for CreateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CreateError::IslandLocked { holder_id, holder_state } => {
+                write!(f, "island is held by session {holder_id} ({holder_state})")
+            }
+            CreateError::CapReached => write!(f, "3 quests are running; stop one first"),
+            CreateError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 impl std::fmt::Display for TransitionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -212,27 +232,98 @@ impl Store {
 
     /// Move a session to `to` only from one of `allowed_from`.
     /// A bad move is an error, never a silent no-op: the client
-    /// must not show a state the server did not take.
+    /// must not show a state the server did not take. The check
+    /// and the write run under one connection lock, so two
+    /// requests cannot both win the same move.
     pub fn transition_state(
         &self,
         id: &str,
         allowed_from: &[&str],
         to: &str,
     ) -> Result<Session, TransitionError> {
-        let session = self
-            .get_session(id)
-            .map_err(TransitionError::Other)?
-            .ok_or(TransitionError::NotFound)?;
-        if !allowed_from.contains(&session.state.as_str()) {
+        let conn = self.conn.lock().map_err(|e| TransitionError::Other(e.to_string()))?;
+        let from: Option<String> = conn
+            .query_row("SELECT state FROM sessions WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .ok();
+        let Some(from) = from else {
+            return Err(TransitionError::NotFound);
+        };
+        if !allowed_from.contains(&from.as_str()) {
             return Err(TransitionError::BadMove {
-                from: session.state,
+                from,
                 to: to.to_string(),
             });
         }
-        self.set_state(id, to).map_err(TransitionError::Other)?;
-        self.get_session(id)
-            .map_err(TransitionError::Other)?
-            .ok_or(TransitionError::NotFound)
+        conn.execute(
+            "UPDATE sessions SET state = ?2, updated_ms = ?3 WHERE id = ?1 AND state = ?4",
+            params![id, to, crate::events::now_ms(), from],
+        )
+        .map_err(|e| TransitionError::Other(e.to_string()))?;
+        let session = conn
+            .query_row("SELECT * FROM sessions WHERE id = ?1", params![id], Self::row_to_session)
+            .map_err(|e| TransitionError::Other(e.to_string()))?;
+        Ok(session)
+    }
+
+    /// Create a session with the island lock and the spawned-quest
+    /// cap checked in the same lock as the insert, so a double
+    /// submit cannot take one island twice or pass the cap.
+    pub fn create_session_guarded(
+        &self,
+        repo_path: &str,
+        island_id: Option<&str>,
+        task: Option<&str>,
+        spawned: bool,
+    ) -> Result<Session, CreateError> {
+        let now = crate::events::now_ms();
+        let session = Session {
+            id: uuid::Uuid::new_v4().to_string(),
+            repo_path: repo_path.to_string(),
+            worktree_path: None,
+            island_id: island_id.map(str::to_string),
+            task: task.map(|t| redact::redact_text(t, &self.secrets)),
+            state: "working".to_string(),
+            cli_session_id: None,
+            created_ms: now,
+            updated_ms: now,
+        };
+        let conn = self.conn.lock().map_err(|e| CreateError::Other(e.to_string()))?;
+        if let Some(island_id) = island_id {
+            let holder: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT id, state FROM sessions WHERE repo_path = ?1 AND island_id = ?2 AND state IN ('working','paused') LIMIT 1",
+                    params![repo_path, island_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .ok();
+            if let Some((holder_id, holder_state)) = holder {
+                return Err(CreateError::IslandLocked {
+                    holder_id,
+                    holder_state,
+                });
+            }
+        }
+        if spawned {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE state = 'working' AND worktree_path IS NOT NULL",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| CreateError::Other(e.to_string()))?;
+            if count >= 3 {
+                return Err(CreateError::CapReached);
+            }
+        }
+        conn.execute(
+            "INSERT INTO sessions (id, repo_path, worktree_path, island_id, task, state, cli_session_id, created_ms, updated_ms)
+             VALUES (?1, ?2, NULL, ?3, ?4, 'working', NULL, ?5, ?5)",
+            params![session.id, session.repo_path, session.island_id, session.task, now],
+        )
+        .map_err(|e| CreateError::Other(e.to_string()))?;
+        Ok(session)
     }
 
     /// The working or paused session that holds the lock on one

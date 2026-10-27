@@ -6,7 +6,7 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ### Added — T5 session lifecycle (step 4, server first)
 - New routes: `POST /api/sessions/{id}/pause`, `/resume`, `/archive`, and `/follow-up`. Bad moves fail with 409 (for example resume on a stopped session); unknown sessions give 404.
-- A spawned session now works in a git worktree at `<repo>/.repo-city/worktrees/<id>` on branch `repo-city/<id8>`. The agent does not edit the user checkout. Worktree create and remove have tests on a real git repo. A non-git repo gives an honest error.
+- A spawned session now works in a git worktree in the system temp dir (`repo-city-worktrees/<id>`) on branch `repo-city/<id8>`. The agent does not edit the user checkout, and the worktree does not pollute the user git status. Worktree create and remove have tests on a real git repo. A non-git repo gives an honest error.
 - Pause kills the agent process and the watcher. It does not emit a finish event. Resume restarts the watcher and, if a CLI session id exists, respawns with `claude --resume <id>`. Follow-up works only on a finished or failed session with a CLI session id.
 - Island lock: one working or paused session per island in one repo. A second create on the same island gives 409. Stop, finish, fail, and archive release the lock.
 - Cap: at most 3 running spawned quests. A fourth spawn gives 409 and names the running quests.
