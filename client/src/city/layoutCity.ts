@@ -147,6 +147,92 @@ export interface CityLayout {
   droppedFiles: string[];
 }
 
+
+/**
+ * Deterministic placement relaxation (plot units). Each round,
+ * an island steps 12% toward the import-weighted centre of its
+ * neighbours, blended toward the map centroid in proportion to
+ * its share of the strongest island's connection weight, plus a
+ * fixed seeded jitter. Rectangle overlaps (with the standard
+ * gap) are pushed apart along the smaller penetration axis.
+ */
+export function relaxPlacement(
+  items: { isl: { id: string }; cols: number; rows: number; px: number; py: number }[],
+  bridges: { from_island: string; to_island: string; count: number }[],
+): void {
+  if (items.length < 2) return;
+  const idx = new Map(items.map((it, i) => [it.isl.id, i]));
+  const weight = items.map(() => 0);
+  const neigh: Map<number, number>[] = items.map(() => new Map<number, number>());
+  for (const b of bridges) {
+    const a = idx.get(b.from_island);
+    const c = idx.get(b.to_island);
+    if (a === undefined || c === undefined || a === c) continue;
+    neigh[a].set(c, (neigh[a].get(c) ?? 0) + b.count);
+    neigh[c].set(a, (neigh[c].get(a) ?? 0) + b.count);
+    weight[a] += b.count;
+    weight[c] += b.count;
+  }
+  // Strongest first: the hub takes the centre, later islands take
+  // the best free spot near the islands they connect to.
+  const order = items.map((_, i) => i).sort((a, b) => weight[b] - weight[a] || items[a].isl.id.localeCompare(items[b].isl.id));
+  const placedIdx: number[] = [];
+  const overlaps = (x: number, y: number, it: (typeof items)[number]) =>
+    placedIdx.some((j) => {
+      const o = items[j];
+      return x < o.px + o.cols + GAP_PLOTS && o.px < x + it.cols + GAP_PLOTS
+        && y < o.py + o.rows + GAP_PLOTS && o.py < y + it.rows + GAP_PLOTS;
+    });
+  for (const i of order) {
+    const it = items[i];
+    if (placedIdx.length === 0) {
+      it.px = 0;
+      it.py = 0;
+      placedIdx.push(i);
+      continue;
+    }
+    // Anchor: import-weighted centre of already placed islands.
+    let ax = 0, ay = 0, aw = 0;
+    for (const j of placedIdx) {
+      ax += (items[j].px + items[j].cols / 2) * (1 + (neigh[i].get(j) ?? 0));
+      ay += (items[j].py + items[j].rows / 2) * (1 + (neigh[i].get(j) ?? 0));
+      aw += 1 + (neigh[i].get(j) ?? 0);
+    }
+    ax /= aw; ay /= aw;
+    const jitter = ((hashSeed(it.isl.id) % 100) / 100 - 0.5) * 2;
+    let best: { x: number; y: number; score: number } | null = null;
+    for (let r = 0; r <= 48 && !best; r += 2) {
+      for (let step = 0; step < 24; step++) {
+        const ang = (step / 24) * Math.PI * 2 + (hashSeed(it.isl.id) % 628) / 100;
+        const cx = ax + Math.cos(ang) * r;
+        const cy = ay + Math.sin(ang) * r * 0.8;
+        const x = Math.round(cx - it.cols / 2);
+        const y = Math.round(cy - it.rows / 2);
+        if (overlaps(x, y, it)) continue;
+        let score = Math.hypot(cx - ax, cy - ay) * 2 + jitter;
+        for (const j of placedIdx) {
+          const w = neigh[i].get(j);
+          if (w) score += w * Math.hypot(cx - (items[j].px + items[j].cols / 2), cy - (items[j].py + items[j].rows / 2)) * 0.15;
+        }
+        if (!best || score < best.score) best = { x, y, score };
+      }
+    }
+    // The search always finds a spot: radius grows until free.
+    let fallback = 50;
+    while (!best) {
+      const x = Math.round(ax + fallback), y = Math.round(ay);
+      if (!overlaps(x, y, it)) best = { x, y, score: 0 };
+      fallback += 4;
+    }
+    it.px = best.x;
+    it.py = best.y;
+    placedIdx.push(i);
+  }
+  const minX = Math.min(...items.map((i) => i.px));
+  const minY = Math.min(...items.map((i) => i.py));
+  for (const it of items) { it.px -= minX; it.py -= minY; }
+}
+
 export function layoutCity(extraction: Extraction): CityLayout {
   const byIsland = new Map<string, typeof extraction.files>();
   for (const f of extraction.files) {
@@ -170,6 +256,17 @@ export function layoutCity(extraction: Extraction): CityLayout {
   const totalPlots = extraction.files.length;
   const shelfPlots = Math.max(8, Math.ceil(Math.sqrt(totalPlots) * 1.6));
 
+  interface Pending {
+    isl: (typeof islands)[number];
+    files: Extraction["files"][number][];
+    cols: number;
+    rows: number;
+    testOnly: boolean;
+    mustKeep: Set<string>;
+    px: number; // plot units, relaxed below
+    py: number;
+  }
+  const pending: Pending[] = [];
   for (const isl of islands) {
     const files = (byIsland.get(isl.id) ?? []).slice().sort((a, b) => a.path.localeCompare(b.path));
     if (files.length === 0) continue;
@@ -185,10 +282,6 @@ export function layoutCity(extraction: Extraction): CityLayout {
       cursorY += shelfH + GAP_PLOTS;
       shelfH = 0;
     }
-    const x = cursorX * PLOT;
-    const y = cursorY * PLOT;
-    // Occupied plot cells in island-local coords: the shape must
-    // keep every one of them as land.
     const mustKeep = new Set<string>();
     files.forEach((f, i) => {
       const lx = testOnly ? i % (cols * PLOT) : (i % cols) * PLOT;
@@ -196,12 +289,31 @@ export function layoutCity(extraction: Extraction): CityLayout {
       for (let dy = 0; dy < (testOnly ? 1 : PLOT); dy++)
         for (let dx = 0; dx < (testOnly ? 1 : PLOT); dx++) mustKeep.add(lx + dx + "," + (ly + dy));
     });
+    pending.push({ isl, files, cols, rows, testOnly, mustKeep, px: cursorX, py: cursorY });
+    cursorX += cols + GAP_PLOTS;
+    shelfH = Math.max(shelfH, rows);
+  }
+
+  // Smarter placement (owner, 2026-10-27): shelf packing is only
+  // the start. A deterministic relaxation then pulls each island
+  // toward the import-weighted centre of its neighbours, and the
+  // most-connected islands toward the middle of the map, so hubs
+  // sit in the centre and the rest settle around them. Seeded
+  // jitter keeps it from looking stamped. Overlaps are pushed
+  // apart every round; nothing here is random per load.
+  relaxPlacement(pending, extraction.bridges);
+
+  for (const item of pending) {
+    const { isl, files } = item;
+    const cols = item.cols, rows = item.rows, testOnly = item.testOnly;
+    const x = Math.round(item.px) * PLOT;
+    const y = Math.round(item.py) * PLOT;
     // The shape runs over the plot area plus a one-cell shore
     // margin on every side. Buildings keep one free cell around
     // them (DESIGN.md layout rule), and the margin is where the
     // organic outline can actually cut: without it, edge plots
     // force a rectangle.
-    const localShape = islandShape(isl.id, cols * PLOT + 2, rows * PLOT + 2, new Set([...mustKeep].map((k) => {
+    const localShape = islandShape(isl.id, cols * PLOT + 2, rows * PLOT + 2, new Set([...item.mustKeep].map((k) => {
       const [lx, ly] = k.split(",").map(Number);
       return lx + 1 + "," + (ly + 1);
     })));
@@ -233,8 +345,6 @@ export function layoutCity(extraction: Extraction): CityLayout {
       fileToIsland.set(f.path, isl.id);
       filePos.set(f.path, { gx, gy, islandId: isl.id });
     });
-    cursorX += cols + GAP_PLOTS;
-    shelfH = Math.max(shelfH, rows);
   }
 
   const knownIslands = new Set(placed.map((i) => i.id));

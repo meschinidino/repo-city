@@ -83,8 +83,11 @@ describe("city layout from an extraction (fixture)", () => {
     const layout = layoutCity(wide);
     const [huge, tiny] = layout.islands;
     expect(layout.buildings).toHaveLength(401);
+    // Disjoint on some axis, in any direction: hub placement is
+    // free to put the tiny island left or above, not only after.
     const disjoint =
-      tiny.x >= huge.x + huge.cols * PLOT || tiny.y >= huge.y + huge.rows * PLOT;
+      tiny.x >= huge.x + huge.cols * PLOT || huge.x >= tiny.x + tiny.cols * PLOT
+      || tiny.y >= huge.y + huge.rows * PLOT || huge.y >= tiny.y + tiny.rows * PLOT;
     expect(disjoint).toBe(true);
   });
 
@@ -224,5 +227,36 @@ describe("organic island shape", () => {
     expect(isl.testCount).toBe(103);
     expect(isl.cols * isl.rows).toBeLessThanOrEqual(6);
     expect(layout.buildings).toHaveLength(103);
+  });
+});
+
+describe("hub placement", () => {
+  it("puts the most-connected island closest to the centre and never overlaps islands", () => {
+    const mk = (id: string, n: number) => ({
+      path: `${id}/f.ts`, island_id: id, roles: [], building: "cottage", import_count: 0, importer_count: 0,
+    });
+    const ext = {
+      counts: { files: 0, islands: 7, bridges: 6, parsed_imports: 0, resolved_imports: 0, unresolved_imports: 0 },
+      islands: ["hub", "a", "b", "c", "d", "e", "f"].map((id) => ({ id, name: id, path: id, file_count: 4, files: [] })),
+      files: ["hub", "a", "b", "c", "d", "e", "f"].flatMap((id) => [mk(id, 1), mk(id, 2), mk(id, 3), mk(id, 4)]),
+      bridges: ["a", "b", "c", "d", "e", "f"].map((id) => ({ from_island: id, to_island: "hub", count: 20 })),
+      unresolved_imports: [],
+    } as unknown as Extraction;
+    const layout = layoutCity(ext);
+    const centre = {
+      gx: layout.cols / 2, gy: layout.rows / 2,
+    };
+    const dist = (i: (typeof layout.islands)[number]) =>
+      Math.hypot(i.center.gx - centre.gx, i.center.gy - centre.gy);
+    const hub = layout.islands.find((i) => i.id === "hub")!;
+    for (const isl of layout.islands) if (isl.id !== "hub") expect(dist(hub)).toBeLessThanOrEqual(dist(isl));
+    // No two island plot-rects overlap (gap may shrink in the settle, land may not).
+    for (let a = 0; a < layout.islands.length; a++) for (let b = a + 1; b < layout.islands.length; b++) {
+      const A = layout.islands[a], B = layout.islands[b];
+      const overlap = A.x < B.x + B.cols * PLOT && B.x < A.x + A.cols * PLOT && A.y < B.y + B.rows * PLOT && B.y < A.y + A.rows * PLOT;
+      expect(overlap).toBe(false);
+    }
+    // Deterministic: same input, same map.
+    expect(layoutCity(ext).islands.map((i) => [i.id, i.x, i.y])).toEqual(layout.islands.map((i) => [i.id, i.x, i.y]));
   });
 });

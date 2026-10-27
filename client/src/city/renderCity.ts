@@ -280,25 +280,59 @@ export class CityView {
         shore.fill({ color: 0x8fd8cf, alpha: 0.28 });
       }
     }
-    // Cliffs (step 2): a rock face under the two front shore edges
-    // of every shore cell, drawn in code like the sea and bridges.
-    // The coast sheet holds no cliff tiles; the concept art's rock
-    // edge is a face, not a tile. North edges get none: they face
-    // away from the camera.
-    const cliffH = TW * 0.38;
+    // Cliffs (step 2, owner fix): not every shore is a cliff. A
+    // front edge gets a rock face only where the land behind it is
+    // thick (distance-to-water of the cell behind the edge >= 2):
+    // headlands get cliffs, thin shores stay beach. Face height
+    // grows with that thickness, capped. Drawn in code like the
+    // sea and bridges; the coast sheet holds no cliff tiles.
+    const landDist = new Map<string, number>();
+    {
+      let frontier: string[] = [];
+      for (const k of landSet) {
+        const [gx, gy] = k.split(",").map(Number);
+        if (!cityLand(gx + 1, gy) || !cityLand(gx - 1, gy) || !cityLand(gx, gy + 1) || !cityLand(gx, gy - 1)) {
+          landDist.set(k, 0);
+          frontier.push(k);
+        }
+      }
+      let d = 0;
+      while (frontier.length && d < 4) {
+        const next: string[] = [];
+        for (const k of frontier) {
+          const [gx, gy] = k.split(",").map(Number);
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+            const nk = gx + dx + "," + (gy + dy);
+            if (cityLand(gx + dx, gy + dy) && !landDist.has(nk)) {
+              landDist.set(nk, d + 1);
+              next.push(nk);
+            }
+          }
+        }
+        frontier = next;
+        d++;
+      }
+    }
+    const cliffBase = TW * 0.38;
     for (const isl of this.layout.islands) {
       for (const key of isl.cells) {
-        {
-          const [gx, gy] = key.split(",").map(Number);
-          const [tx, ty] = proj.project(gx, gy);
-          const left: [number, number] = [tx - TW / 2, ty + TW / 4];
-          const bottom: [number, number] = [tx, ty + TW / 2];
-          const right: [number, number] = [tx + TW / 2, ty + TW / 4];
-          if (!cityLand(gx, gy + 1)) {
+        const [gx, gy] = key.split(",").map(Number);
+        const [tx, ty] = proj.project(gx, gy);
+        const left: [number, number] = [tx - TW / 2, ty + TW / 4];
+        const bottom: [number, number] = [tx, ty + TW / 2];
+        const right: [number, number] = [tx + TW / 2, ty + TW / 4];
+        if (!cityLand(gx, gy + 1)) {
+          const behind = landDist.get(gx + "," + (gy - 1)) ?? 0;
+          if (behind >= 2) {
+            const cliffH = cliffBase * (0.7 + 0.2 * Math.min(behind, 3));
             shore.poly([left[0], left[1], bottom[0], bottom[1], bottom[0], bottom[1] + cliffH, left[0], left[1] + cliffH]);
             shore.fill({ color: 0x7d7468, alpha: 1 });
           }
-          if (!cityLand(gx + 1, gy)) {
+        }
+        if (!cityLand(gx + 1, gy)) {
+          const behind = landDist.get(gx - 1 + "," + gy) ?? 0;
+          if (behind >= 2) {
+            const cliffH = cliffBase * (0.7 + 0.2 * Math.min(behind, 3));
             shore.poly([bottom[0], bottom[1], right[0], right[1], right[0], right[1] + cliffH, bottom[0], bottom[1] + cliffH]);
             shore.fill({ color: 0x6b6156, alpha: 1 });
           }
@@ -389,6 +423,52 @@ export class CityView {
       const c = new Container();
       c.addChild(s);
       items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
+    }
+
+    // Inland life: trees on free inner land cells. Free means no
+    // building plot and not shore (landDist >= 1). Seeded by cell,
+    // sparse, capped per island. There is no mountain sprite in
+    // the sheets; trees and the boulder are what the art holds
+    // today, so mountains wait for a sprite-pipeline sheet.
+    {
+      const treeSprite = this.world.sprites.find((s) => s.key === "tree");
+      const treeTex = this.tex("tree");
+      if (treeSprite?.plate && treeTex) {
+        const pt = treeSprite.plate;
+        const unit = Math.hypot(TW / 2, TW / 4);
+        const scale = Math.min(
+          unit / Math.hypot(pt.B[0] - pt.L[0], pt.B[1] - pt.L[1]),
+          unit / Math.hypot(pt.R[0] - pt.B[0], pt.R[1] - pt.B[1]),
+        );
+        const pcx = (pt.L[0] + pt.R[0]) / 2;
+        const pcy = (pt.L[1] + pt.R[1]) / 2;
+        const occupied = new Set<string>();
+        for (const b of this.layout.buildings) {
+          if (b.building === "pennant") occupied.add(b.gx + "," + b.gy);
+          else for (let dy = 0; dy < PLOT; dy++) for (let dx = 0; dx < PLOT; dx++) occupied.add(b.gx + dx + "," + (b.gy + dy));
+        }
+        for (const isl of this.layout.islands) {
+          let placedTrees = 0;
+          const cap = Math.max(1, Math.floor(isl.cells.size / 14));
+          for (const key of isl.cells) {
+            if (placedTrees >= cap) break;
+            if (occupied.has(key)) continue;
+            const [gx, gy] = key.split(",").map(Number);
+            if ((landDist.get(key) ?? 0) < 1) continue;
+            const h = Math.abs(Math.sin(gx * 127.1 + gy * 311.7 + isl.x * 17.3) * 43758.5453) % 1;
+            if (h > 0.16) continue;
+            const [fx, fy] = proj.project(gx + 0.5, gy + 0.5);
+            const s = new Sprite(treeTex);
+            s.width = treeSprite.width * scale;
+            s.height = treeSprite.height * scale;
+            s.position.set(fx - pcx * scale, fy - pcy * scale);
+            const c = new Container();
+            c.addChild(s);
+            items.push({ depth: gx + gy + 0.5, kind: 1, node: c });
+            placedTrees++;
+          }
+        }
+      }
     }
 
     items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
