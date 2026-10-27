@@ -81,3 +81,6 @@ Overall design completeness: 5/10 → 8/10.
 Status: DONE_WITH_CONCERNS (mocks are the next gate, not yet run;
 cross-model outside voices not run — Claude Opus hit its session
 limit on 2026-10-27, retry when it resets).
+- D-mock-pick (owner, 2026-10-27): variant A "Harbor bar" approved
+  from three generated mockups (designs/command-bar-20261027/).
+  B (pennant tokens) and C (manifest) rejected.

@@ -5,6 +5,7 @@ pub mod extract;
 pub mod report;
 pub mod store;
 pub mod watch;
+pub mod worktree;
 
 pub use extract::{
     extract_repo, Bridge, Counts, Extraction, FileInfo, Island, Role, UnresolvedImport,
