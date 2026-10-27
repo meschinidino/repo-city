@@ -87,7 +87,12 @@ impl AppState {
                 // were already uncommitted when the session started
                 // are not touches by this session and never emit.
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-                if let Ok(initial) = crate::watch::git_status_changes(&root) {
+                let seed_root = root.clone();
+                if let Ok(Ok(initial)) = tokio::task::spawn_blocking(move || {
+                    crate::watch::git_status_changes(&seed_root)
+                })
+                .await
+                {
                     for c in &initial {
                         seen.insert(format!("{}:{:?}", c.path, c.change));
                     }
@@ -110,6 +115,8 @@ impl AppState {
                         continue;
                     };
                     let mut current = std::collections::HashSet::new();
+                    // Fetched once per tick, not once per path.
+                    let recent = store.events_for(&sid, 0).unwrap_or_default();
                     for c in changes {
                         // Directories are not buildings, and a path
                         // the notify stream just reported is not a
@@ -119,7 +126,6 @@ impl AppState {
                         {
                             continue;
                         }
-                        let recent = store.events_for(&sid, 0).unwrap_or_default();
                         let just_seen = recent.iter().rev().take(50).any(|e| {
                             matches!(&e.payload, EventPayload::FileTouched { path, .. } if path == &c.path)
                                 && crate::events::now_ms() - e.ts_ms < 10_000
@@ -354,6 +360,18 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
                     }
                     other => other,
                 };
+                // Never log a finish after a stop, even if the line
+                // was read just before the stop landed.
+                if matches!(payload, EventPayload::SessionFinished { .. })
+                    && state
+                        .store
+                        .get_session(&session_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|s| s.state == "stopped")
+                {
+                    continue;
+                }
                 let _ = state.emit(&session_id, Source::Cli, payload);
             }
         }
@@ -491,6 +509,9 @@ async fn stop_session(
         }
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
+    // State first: the CLI reader checks it before logging anything
+    // more, so nothing can land after the stopped event.
+    let _ = state.store.set_state(&id, "stopped");
     // Take the watcher out first so the mutex is not held while its
     // thread joins, then kill the agent so it cannot keep editing
     // unwatched after the stop.
@@ -513,7 +534,6 @@ async fn stop_session(
         let _ = child.kill().await;
         let _ = child.wait().await;
     }
-    let _ = state.store.set_state(&id, "stopped");
     match state.emit(
         &id,
         Source::System,

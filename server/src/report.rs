@@ -84,9 +84,20 @@ pub fn diff_report(root: &Path) -> DiffReport {
             new_file: false,
         });
     }
-    if let Ok(status) = git(root, &["status", "--porcelain=v1"]) {
-        for line in status.lines() {
-            if let Some(path) = line.strip_prefix("?? ") {
+    if let Ok(status) = git(root, &["status", "--porcelain=v1", "-z", "-uall"]) {
+        // -z entries are "XY <path>" (renames carry a second field,
+        // consumed like in the watcher parser); paths are unquoted.
+        let mut entries = status.split('\0').peekable();
+        while let Some(entry) = entries.next() {
+            if entry.len() < 4 {
+                continue;
+            }
+            let code = &entry[..2];
+            let path = &entry[3..];
+            if code.contains('R') || code.contains('C') {
+                let _ = entries.next();
+            }
+            if code == "??" {
                 if !files.iter().any(|f| f.path == path) {
                     files.push(FileDiff {
                         path: path.to_string(),
@@ -96,9 +107,9 @@ pub fn diff_report(root: &Path) -> DiffReport {
                         new_file: true,
                     });
                 }
-            } else if let Some(path) = line.strip_prefix("A  ") {
-                // Staged-new: already in the numstat list with real
-                // counts; just mark it as new.
+            } else if code.starts_with('A') {
+                // Staged-new (A, AM, ...): already in the numstat
+                // list with real counts; just mark it as new.
                 if let Some(f) = files.iter_mut().find(|f| f.path == path) {
                     f.new_file = true;
                 }
@@ -196,6 +207,9 @@ mod tests {
         git(root, &["commit", "-qm", "init"]);
         std::fs::write(root.join("img.bin"), [9u8, 8, 7]).unwrap();
         std::fs::write(root.join("fresh.txt"), "hi\n").unwrap();
+        std::fs::write(root.join("staged.txt"), "one\n").unwrap();
+        git(root, &["add", "staged.txt"]);
+        std::fs::write(root.join("staged.txt"), "one\ntwo\n").unwrap();
 
         let report = diff_report(root);
         assert!(report.available);
@@ -207,6 +221,16 @@ mod tests {
             report.summary.contains("Binary files changed: img.bin"),
             "{}",
             report.summary
+        );
+        let staged = report
+            .files
+            .iter()
+            .find(|f| f.path == "staged.txt")
+            .unwrap();
+        assert!(
+            staged.new_file && staged.insertions == 2,
+            "files: {:?}",
+            report.files
         );
         assert!(
             report.summary.contains("New files: fresh.txt"),
