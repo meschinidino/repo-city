@@ -3,7 +3,7 @@ import type { World } from "../map/pipeline";
 import { PLAIN_GRASS_INDEX } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeSpan, cityProjector, PLOT, type CityLayout } from "./layoutCity";
+import { bridgeDeck, bridgeSpan, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -202,8 +202,10 @@ export class CityView {
     }
     root.addChild(shore);
 
-    // bridges shore-to-shore (never across the land they connect),
-    // width grows with import count
+    // Bridges are decks, not lines: the same code-drawn bridge as
+    // the test map (side face, plank seams, posts, rope rails),
+    // generalised to a diagonal shore-to-shore span. A lane-gold
+    // chevron near the far end points along the import direction.
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
     const bridges = new Graphics();
     for (const br of this.layout.bridges) {
@@ -215,11 +217,74 @@ export class CityView {
         { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
       );
       if (!span) continue;
-      const [ax, ay] = proj.project(span[0].gx, span[0].gy);
-      const [bx, by] = proj.project(span[1].gx, span[1].gy);
-      bridges.moveTo(ax, ay);
-      bridges.lineTo(bx, by);
-      bridges.stroke({ color: 0xb98652, alpha: 0.55, width: Math.min(6, 1.5 + Math.log2(br.count + 1)) });
+      const deck = bridgeDeck(span, br.count);
+      const P = (gx: number, gy: number, z = 0): [number, number] => {
+        const [x, y] = proj.project(gx, gy);
+        return [x, y - z * TW];
+      };
+      const at = (t: number, v: number, z = 0): [number, number] =>
+        P(
+          deck.a.gx + (deck.b.gx - deck.a.gx) * t + deck.perp.gx * v,
+          deck.a.gy + (deck.b.gy - deck.a.gy) * t + deck.perp.gy * v,
+          z,
+        );
+      const c = deck.corners.map((pt) => P(pt.gx, pt.gy));
+      // side face on whichever edge faces the viewer (lower on screen)
+      const front = (c[2][1] + c[3][1]) / 2 > (c[0][1] + c[1][1]) / 2 ? [c[3], c[2]] : [c[1], c[0]];
+      bridges.poly([front[0][0], front[0][1], front[1][0], front[1][1], front[1][0], front[1][1] + TW * 0.1, front[0][0], front[0][1] + TW * 0.1]);
+      bridges.fill({ color: 0x7a5432 });
+      // posts below the deck edges
+      for (let s = 0.5; s < deck.len; s += 1) {
+        for (const v of [-1, 1]) {
+          const p = at(s / deck.len, v);
+          bridges.moveTo(p[0], p[1]);
+          bridges.lineTo(p[0], p[1] + TW * 0.22);
+        }
+      }
+      bridges.stroke({ color: 0x5b3e25, width: Math.max(1, TW * 0.03) });
+      // deck top and plank seams
+      bridges.poly([...c[0], ...c[1], ...c[2], ...c[3]]);
+      bridges.fill({ color: 0xb98652 });
+      for (let s = 0.12; s < deck.len; s += 0.24) {
+        const p = at(s / deck.len, -1);
+        const q2 = at(s / deck.len, 1);
+        bridges.moveTo(p[0], p[1]);
+        bridges.lineTo(q2[0], q2[1]);
+      }
+      bridges.stroke({ color: 0x5a3c1e, alpha: 0.5, width: Math.max(1, TW / 90) });
+      // rope rails: posts up, sagging rope between them
+      for (const v of [-1, 1]) {
+        for (let s = 0; s <= deck.len + 1e-6; s += 0.7) {
+          const p = at(Math.min(1, s / deck.len), v);
+          const q2 = at(Math.min(1, s / deck.len), v, 0.11);
+          bridges.moveTo(p[0], p[1]);
+          bridges.lineTo(q2[0], q2[1]);
+        }
+        bridges.stroke({ color: 0x5b3e25, width: Math.max(1, TW * 0.022) });
+        let first = true;
+        for (let s = 0; s <= deck.len + 1e-6; s += 0.07) {
+          const sag = 0.025 * Math.sin(((s % 0.7) / 0.7) * Math.PI);
+          const p = at(Math.min(1, s / deck.len), v, 0.1 - sag);
+          if (first) {
+            bridges.moveTo(p[0], p[1]);
+            first = false;
+          } else bridges.lineTo(p[0], p[1]);
+        }
+        bridges.stroke({ color: 0xd9c08c, width: Math.max(1, TW / 80) });
+      }
+      // direction chevron on the deck: importer -> imported module
+      const mid = at(0.86, 0);
+      const fwd = at(0.97, 0);
+      const back = at(0.75, 0);
+      const ux = fwd[0] - back[0];
+      const uy = fwd[1] - back[1];
+      const ul = Math.hypot(ux, uy) || 1;
+      const nx = (-uy / ul) * TW * 0.16;
+      const ny = (ux / ul) * TW * 0.16;
+      bridges.moveTo(mid[0] - (ux / ul) * TW * 0.14 + nx, mid[1] - (uy / ul) * TW * 0.14 + ny);
+      bridges.lineTo(fwd[0], fwd[1]);
+      bridges.lineTo(mid[0] - (ux / ul) * TW * 0.14 - nx, mid[1] - (uy / ul) * TW * 0.14 - ny);
+      bridges.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
     }
     root.addChild(bridges);
 
@@ -246,7 +311,7 @@ export class CityView {
       s.position.set(fx - pcx * scale, fy - pcy * scale);
       const c = new Container();
       c.addChild(s);
-      items.push({ depth: b.gx + b.gy + 0.6, kind: 1, node: c });
+      items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
     }
 
     items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
