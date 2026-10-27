@@ -6,7 +6,11 @@ export const COAST_NAMES = ["Shore UL", "Shore UR", "Shore LR", "Shore LL", "Cor
 export const PLAIN_GRASS_INDEX = 9;
 
 export function coastMask(gx: number, gy: number): number {
-  return (land(gx - 1, gy) ? 0 : 1) | (land(gx, gy - 1) ? 0 : 2) | (land(gx + 1, gy) ? 0 : 4) | (land(gx, gy + 1) ? 0 : 8);
+  return coastMaskWith(land, gx, gy);
+}
+/** Same mask for any land test (the city renderer's island grid). */
+export function coastMaskWith(isLand: (gx: number, gy: number) => boolean, gx: number, gy: number): number {
+  return (isLand(gx - 1, gy) ? 0 : 1) | (isLand(gx, gy - 1) ? 0 : 2) | (isLand(gx + 1, gy) ? 0 : 4) | (isLand(gx, gy + 1) ? 0 : 8);
 }
 export function nearestCoastIndex(mask: number): { index: number; distance: number; exact: boolean } {
   let best = PLAIN_GRASS_INDEX, bd = 99;
@@ -19,6 +23,10 @@ export function nearestCoastIndex(mask: number): { index: number; distance: numb
 }
 /** Index into fitted coast tiles for a land cell (prototype scene rule). */
 export function coastTileIndex(gx: number, gy: number): number {
-  const m = coastMask(gx, gy);
+  return coastTileIndexWith(land, gx, gy);
+}
+/** Same rule for any land test (the city renderer's island grid). */
+export function coastTileIndexWith(isLand: (gx: number, gy: number) => boolean, gx: number, gy: number): number {
+  const m = coastMaskWith(isLand, gx, gy);
   return m === 0 ? PLAIN_GRASS_INDEX : nearestCoastIndex(m).index;
 }

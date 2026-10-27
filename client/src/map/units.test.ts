@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { keyMagenta, isCyan } from "./colorKey";
 import { connectedComponents } from "./components";
 import { chooseFootprint } from "./plate";
-import { coastMask, nearestCoastIndex } from "./coast";
+import { coastMask, coastTileIndexWith, nearestCoastIndex, PLAIN_GRASS_INDEX } from "./coast";
 import { createPixels } from "./pixels";
 
 function solid(w: number, h: number, rgba: [number, number, number, number]) {
@@ -50,6 +50,14 @@ describe("coast autotiling", () => {
   it("interior land has mask 0 and an exact plain-grass tile", () => {
     expect(coastMask(3, 3)).toBe(0);
     expect(nearestCoastIndex(0).exact).toBe(true);
+  });
+  it("a custom land test (city islands) gets shore tiles at its edge and grass inside", () => {
+    // One 3x3 island at cells 10..12: centre is plain grass, a
+    // corner cell gets a shore or corner tile, never plain grass.
+    const land = (gx: number, gy: number) => gx >= 10 && gx < 13 && gy >= 10 && gy < 13;
+    expect(coastTileIndexWith(land, 11, 11)).toBe(PLAIN_GRASS_INDEX);
+    expect(coastTileIndexWith(land, 10, 10)).not.toBe(PLAIN_GRASS_INDEX);
+    expect(coastTileIndexWith(land, 11, 10)).not.toBe(PLAIN_GRASS_INDEX);
   });
   it("unknown masks fall back to the nearest tile, never undefined", () => {
     const r = nearestCoastIndex(5);

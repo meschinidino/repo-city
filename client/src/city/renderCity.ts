@@ -1,9 +1,9 @@
 import { Application, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { World } from "../map/pipeline";
-import { PLAIN_GRASS_INDEX } from "../map/coast";
+import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeChevron, bridgeSpan, cityBridgeDeck, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
+import { bridgeSpan, cityBridgeDeck, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -32,6 +32,15 @@ export class CityView {
   private root!: Container;
   private cam = { scale: 1, x: 0, y: 0 };
   private fitScale = 1;
+  private bridgeGfx!: Graphics;
+  private pulseGfx!: Graphics;
+  private zoomLevel: "map" | "island" = "map";
+  private bridgePairs: {
+    count: number;
+    span: [{ gx: number; gy: number }, { gx: number; gy: number }];
+    deck: ReturnType<typeof cityBridgeDeck>;
+    dirs: [{ gx: number; gy: number }, { gx: number; gy: number }][];
+  }[] = [];
 
   constructor(world: World, layout: CityLayout) {
     this.world = world;
@@ -70,6 +79,66 @@ export class CityView {
   private applyCam(): void {
     this.root.position.set(this.cam.x, this.cam.y);
     this.root.scale.set(this.cam.scale);
+    // D-zoom: past 2x fit the map becomes the island view. Bridge
+    // treatment and direction pulses follow the level.
+    const level = this.cam.scale > this.fitScale * 2 ? "island" : "map";
+    if (level !== this.zoomLevel) {
+      this.zoomLevel = level;
+      if (this.bridgeGfx) this.drawBridges();
+    }
+  }
+
+  /** Bridges by zoom level (D-zoom): at map zoom only strong pairs
+   * (15+ imports, pinned from the GestiKo distribution: 24 of 381
+   * pairs, 41% of imports) draw, as slim decks. At island zoom
+   * every pair draws. Direction is a moving pulse, not a chevron. */
+  private drawBridges(): void {
+    const g = this.bridgeGfx;
+    const proj = this.proj;
+    g.clear();
+    for (const pair of this.bridgePairs) {
+      const strong = pair.count >= 15;
+      if (this.zoomLevel === "map" && !strong) continue;
+      if (strong) {
+        const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
+        g.poly(corners);
+        g.fill({ color: 0xb98652, alpha: 0.92 });
+        const [c0, c1, c2, c3] = pair.deck.corners.map((c) => proj.project(c.gx, c.gy));
+        g.moveTo(c0[0], c0[1]); g.lineTo(c1[0], c1[1]);
+        g.moveTo(c3[0], c3[1]); g.lineTo(c2[0], c2[1]);
+        g.stroke({ color: 0x7a5432, width: 2, alpha: 0.9 });
+      } else {
+        const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
+        const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
+        g.moveTo(ax, ay);
+        g.lineTo(bx, by);
+        g.stroke({ color: 0xcfa06a, alpha: 0.5, width: 2 });
+      }
+    }
+  }
+
+  /** Direction pulses: one light dot per import direction travels
+   * the span, importer toward imported. Island zoom only. This is
+   * a reading aid, not an agent signal (DESIGN.md stillness rule:
+   * noted as a departure in the PR for owner judgement). */
+  private drawPulses(nowMs: number): void {
+    const g = this.pulseGfx;
+    if (!g) return;
+    g.clear();
+    if (this.zoomLevel !== "island") return;
+    const TW = 64;
+    let i = 0;
+    for (const pair of this.bridgePairs) {
+      for (const span of pair.dirs) {
+        i++;
+        const t = ((nowMs / 6000) + i * 0.37) % 1;
+        const gx = span[0].gx + (span[1].gx - span[0].gx) * t;
+        const gy = span[0].gy + (span[1].gy - span[0].gy) * t;
+        const [px, py] = this.proj.project(gx, gy);
+        g.circle(px, py, TW * 0.085);
+        g.fill({ color: 0xffe3a3, alpha: 0.95 });
+      }
+    }
   }
 
   private fitCamera(): void {
@@ -161,90 +230,129 @@ export class CityView {
         this.applyCam();
       }
     });
-    const tileTex = Texture.from(pixelsToCanvas(this.world.tiles[PLAIN_GRASS_INDEX]));
-    const tileH = (this.world.tiles[PLAIN_GRASS_INDEX].height * TW) / TWBASE;
+    // Coast tiles (step 1 of the owner-approved order): every land
+    // cell picks its fitted tile from which neighbors are water,
+    // the spike rule in map/coast.ts. The city used plain grass on
+    // every cell before this; the shore now comes from the sheet.
+    const tileTexByIndex = this.world.tiles.map((t) => Texture.from(pixelsToCanvas(t)));
+    const tileHByIndex = this.world.tiles.map((t) => (t.height * TW) / TWBASE);
+    const landSet = new Set<string>();
+    for (const isl of this.layout.islands) for (const k of isl.cells) landSet.add(k);
+    const cityLand = (gx: number, gy: number): boolean => landSet.has(gx + "," + gy);
 
     interface Item { depth: number; kind: number; node: Container }
     const items: Item[] = [];
 
-    // island ground: plain-grass fitted tiles on every island cell
+    // island ground: coast-fitted tiles on every land cell of the
+    // island's organic outline (layoutCity.islandShape)
     for (const isl of this.layout.islands) {
-      for (let gy = isl.y; gy < isl.y + isl.rows * PLOT; gy++) {
-        for (let gx = isl.x; gx < isl.x + isl.cols * PLOT; gx++) {
-          const s = new Sprite(tileTex);
+      const cells = [...isl.cells]
+        .map((k) => k.split(",").map(Number) as [number, number])
+        .sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
+      for (const [gx, gy] of cells) {
+        const ti = coastTileIndexWith(cityLand, gx, gy);
+        const s = new Sprite(tileTexByIndex[ti]);
+        const [tx, ty] = proj.project(gx, gy);
+        s.position.set(tx - TW / 2, ty);
+        s.width = TW;
+        s.height = tileHByIndex[ti];
+        const c = new Container();
+        c.addChild(s);
+        items.push({ depth: gx + gy, kind: 0, node: c });
+      }
+    }
+
+    // shoreline: shallow halo under every island (DESIGN.md:
+    // shallow water is drawn in code under the tiles). The halo
+    // follows the island outline: the land mask grown by one cell.
+    // The sand edge itself comes from the coast tiles.
+    const shore = new Graphics();
+    for (const isl of this.layout.islands) {
+      const grown = new Set<string>();
+      for (const k of isl.cells) {
+        const [gx, gy] = k.split(",").map(Number);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) grown.add(gx + dx + "," + (gy + dy));
+      }
+      for (const k of grown) {
+        const [gx, gy] = k.split(",").map(Number);
+        const [tx, ty] = proj.project(gx, gy);
+        shore.poly([tx, ty - TW / 4, tx + TW / 2, ty, tx, ty + TW / 4, tx - TW / 2, ty]);
+        shore.fill({ color: 0x8fd8cf, alpha: 0.28 });
+      }
+    }
+    // Cliffs (step 2): a rock face under the two front shore edges
+    // of every shore cell, drawn in code like the sea and bridges.
+    // The coast sheet holds no cliff tiles; the concept art's rock
+    // edge is a face, not a tile. North edges get none: they face
+    // away from the camera.
+    const cliffH = TW * 0.38;
+    for (const isl of this.layout.islands) {
+      for (const key of isl.cells) {
+        {
+          const [gx, gy] = key.split(",").map(Number);
           const [tx, ty] = proj.project(gx, gy);
-          s.position.set(tx - TW / 2, ty);
-          s.width = TW;
-          s.height = tileH;
-          const c = new Container();
-          c.addChild(s);
-          items.push({ depth: gx + gy, kind: 0, node: c });
+          const left: [number, number] = [tx - TW / 2, ty + TW / 4];
+          const bottom: [number, number] = [tx, ty + TW / 2];
+          const right: [number, number] = [tx + TW / 2, ty + TW / 4];
+          if (!cityLand(gx, gy + 1)) {
+            shore.poly([left[0], left[1], bottom[0], bottom[1], bottom[0], bottom[1] + cliffH, left[0], left[1] + cliffH]);
+            shore.fill({ color: 0x7d7468, alpha: 1 });
+          }
+          if (!cityLand(gx + 1, gy)) {
+            shore.poly([bottom[0], bottom[1], right[0], right[1], right[0], right[1] + cliffH, bottom[0], bottom[1] + cliffH]);
+            shore.fill({ color: 0x6b6156, alpha: 1 });
+          }
         }
       }
     }
-
-    // shoreline: shallow halo and a sand edge under every island
-    // (DESIGN.md: shallow water is drawn in code under the tiles)
-    const shore = new Graphics();
-    for (const isl of this.layout.islands) {
-      const w = isl.cols * PLOT;
-      const h = isl.rows * PLOT;
-      const ring = (e: number): number[] => [
-        ...proj.project(isl.x - e, isl.y - e),
-        ...proj.project(isl.x + w + e, isl.y - e),
-        ...proj.project(isl.x + w + e, isl.y + h + e),
-        ...proj.project(isl.x - e, isl.y + h + e),
-      ];
-      shore.poly(ring(1.3));
-      shore.fill({ color: 0x8fd8cf, alpha: 0.4 });
-      shore.poly(ring(0.45));
-      shore.fill({ color: 0xe8cf92, alpha: 0.9 });
-    }
     root.addChild(shore);
 
-    // Bridges at city scale are shore-to-shore strokes (PR #12),
-    // one per unordered island pair at the wider direction's width,
-    // with a lane-gold chevron per direction drawn later. Full deck
-    // bridges (the test map's) were tried in this PR and reverted
-    // by owner call: 381 decks carpeted the sea and the archipelago
-    // stopped reading as islands in open water. Deck treatment at
-    // island zoom is a step-4 (T12) zoom-semantics question.
+    // Bridge data: one entry per unordered island pair, with one
+    // oriented span per import direction for the pulses.
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
-    const bridges = new Graphics();
-    const deckList: { span: [{ gx: number; gy: number }, { gx: number; gy: number }]; deck: ReturnType<typeof cityBridgeDeck> }[] = [];
-    const pairs = new Map<string, { count: number; dirs: CityLayout["bridges"] }>();
-    for (const br of this.layout.bridges) {
-      const key = [br.from, br.to].sort().join("|");
-      const pair = pairs.get(key) ?? { count: 0, dirs: [] };
-      pair.count = Math.max(pair.count, br.count);
-      pair.dirs.push(br);
-      pairs.set(key, pair);
-    }
-    for (const pair of pairs.values()) {
-      const br = pair.dirs[0];
-      const a = byId.get(br.from);
-      const b = byId.get(br.to);
-      if (!a || !b) continue;
-      const span = bridgeSpan(
-        { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT },
-        { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
-      );
-      if (!span) continue;
-      const deck = cityBridgeDeck(span, pair.count);
-      const [ax, ay] = proj.project(span[0].gx, span[0].gy);
-      const [bx, by] = proj.project(span[1].gx, span[1].gy);
-      bridges.moveTo(ax, ay);
-      bridges.lineTo(bx, by);
-      bridges.stroke({ color: 0xb98652, alpha: 0.55, width: Math.min(6, 1.5 + Math.log2(pair.count + 1)) });
-      for (const dir of pair.dirs) {
-        deckList.push({ span: dir.from === br.from ? span : [span[1], span[0]], deck });
+    {
+      const pairs = new Map<string, { count: number; dirs: CityLayout["bridges"] }>();
+      for (const br of this.layout.bridges) {
+        const key = [br.from, br.to].sort().join("|");
+        const pair = pairs.get(key) ?? { count: 0, dirs: [] };
+        pair.count = Math.max(pair.count, br.count);
+        pair.dirs.push(br);
+        pairs.set(key, pair);
+      }
+      for (const pair of pairs.values()) {
+        const br = pair.dirs[0];
+        const a = byId.get(br.from);
+        const b = byId.get(br.to);
+        if (!a || !b) continue;
+        const span = bridgeSpan(
+          { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT },
+          { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
+        );
+        if (!span) continue;
+        this.bridgePairs.push({
+          count: pair.count,
+          span,
+          deck: cityBridgeDeck(span, pair.count),
+          dirs: pair.dirs.map((dir) => (dir.from === br.from ? span : [span[1], span[0]] as typeof span)),
+        });
       }
     }
-    root.addChild(bridges);
+    this.bridgeGfx = new Graphics();
+    this.pulseGfx = new Graphics();
+    root.addChild(this.bridgeGfx);
+    this.drawBridges();
 
     // buildings, one sprite per file, placed by its plate footprint
+    const drawnTestIslets = new Set<string>();
     for (const b of this.layout.buildings) {
       if (b.building === "pennant") {
+        // A test-only islet draws one pennant for the whole island;
+        // its count is in the label. 103 flags said nothing.
+        const home = this.layout.islands.find((i) => i.id === b.islandId);
+        if (home?.testOnly) {
+          if (drawnTestIslets.has(home.id)) continue;
+          drawnTestIslets.add(home.id);
+        }
         // Test files are not buildings (DESIGN.md): a small flag on
         // a pole at the plot centre, in the island's depth order.
         const [fx, fy] = proj.project(b.gx + PLOT / 2, b.gy + PLOT / 2);
@@ -285,32 +393,21 @@ export class CityView {
 
     items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
 
-    // Direction chevrons last among the static layers, so a
-    // shoreline arrow is not buried under the island it points at.
-    const chevrons = new Graphics();
-    for (const { span, deck } of deckList) {
-      const ch = bridgeChevron(span, deck);
-      const tip = proj.project(ch.tip.gx, ch.tip.gy);
-      const wa = proj.project(ch.wingA.gx, ch.wingA.gy);
-      const wb = proj.project(ch.wingB.gx, ch.wingB.gy);
-      chevrons.moveTo(wa[0], wa[1]);
-      chevrons.lineTo(tip[0], tip[1]);
-      chevrons.lineTo(wb[0], wb[1]);
-    }
-    chevrons.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
-    root.addChild(chevrons);
-
     // island labels
     for (const isl of this.layout.islands) {
       const [lx, ly] = proj.project(isl.center.gx, isl.y + isl.rows * PLOT + 0.7);
       const t = new Text({
-        text: `${isl.name} · ${this.layout.buildings.filter((b) => b.islandId === isl.id).length}`,
+        text: isl.testOnly
+          ? `${isl.name} · ${isl.testCount} tests`
+          : `${isl.name} · ${this.layout.buildings.filter((b) => b.islandId === isl.id).length}`,
         style: { fontFamily: "\"Bricolage Grotesque\", sans-serif", fontWeight: "800", fontSize: 20, fill: 0xffffff, stroke: { color: 0x14323c, width: 4, alpha: 0.55 } },
       });
       t.anchor.set(0.5, 0);
       t.position.set(lx, ly);
       root.addChild(t);
     }
+
+    root.addChild(this.pulseGfx);
 
     // construction overlay on the building being edited
     const constructionTex = this.tex("construction");
@@ -335,7 +432,8 @@ export class CityView {
     root.addChild(this.ship);
 
     // sail toward the target every frame; motion follows events only
-    this.app.ticker.add(() => {
+    this.app.ticker.add((time) => {
+      this.drawPulses(time.lastTime);
       if (!this.shipTarget) return;
       const [tx, ty] = this.shipTarget;
       this.ship.position.x += (tx - this.ship.position.x) * 0.07;

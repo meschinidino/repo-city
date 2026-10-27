@@ -19,6 +19,111 @@ export interface CityIsland {
   rows: number; // in plots
   gate: { gx: number; gy: number }; // first plot, grid cells
   center: { gx: number; gy: number }; // grid cells
+  /** Land cells (grid cells, "gx,gy") inside the island rect: the
+   * organic outline. Every occupied plot cell is always land. */
+  cells: Set<string>;
+  /** Every file on this island is a test: the island is a compact
+   * islet and does not size by file count. */
+  testOnly: boolean;
+  testCount: number;
+}
+
+/** Stable string hash (FNV-1a) for shape seeds. */
+export function hashSeed(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
+}
+
+/** Seeded value noise, 3 octaves. Same shape on every load. */
+function makeNoise(seed: number): (x: number, y: number) => number {
+  const hash = (x: number, y: number): number => {
+    const n = Math.sin(x * 127.1 + y * 311.7 + seed * 0.371) * 43758.5453;
+    return n - Math.floor(n);
+  };
+  const smooth = (x: number, y: number): number => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    return hash(xi, yi) * (1 - u) * (1 - v) + hash(xi + 1, yi) * u * (1 - v)
+      + hash(xi, yi + 1) * (1 - u) * v + hash(xi + 1, yi + 1) * u * v;
+  };
+  return (x, y) => 0.55 * smooth(x, y) + 0.3 * smooth(x * 2.1, y * 2.1) + 0.15 * smooth(x * 4.3, y * 4.3);
+}
+
+/**
+ * Organic island outline over a w x h cell rect (island-shape
+ * recipe from the games research: noise minus radial falloff,
+ * two majority-smoothing passes, largest landmass, holes filled).
+ * `mustKeep` cells (occupied plots) are forced to land after the
+ * smoothing, so a cut never takes a building. Deterministic per id.
+ */
+export function islandShape(id: string, w: number, h: number, mustKeep: Set<string>): Set<string> {
+  if (w < 5 || h < 5) return new Set([...mustKeep, ...rectCells(w, h)]);
+  const noise = makeNoise(hashSeed(id) % 10000);
+  const cx = (w - 1) / 2, cy = (h - 1) / 2;
+  let cells = new Set<string>();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const d = Math.sqrt(((x - cx) / (w * 0.62)) ** 2 + ((y - cy) / (h * 0.62)) ** 2);
+    if (noise(x * 0.16, y * 0.16) - d * 0.52 > 0.02) cells.add(x + "," + y);
+  }
+  const has = (s: Set<string>, x: number, y: number) => s.has(x + "," + y);
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Set<string>();
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (has(cells, x + dx, y + dy)) n++;
+      if (has(cells, x, y) ? n >= 4 : n >= 5) next.add(x + "," + y);
+    }
+    cells = next;
+  }
+  // Largest connected landmass only.
+  const seen = new Set<string>();
+  let best = new Set<string>();
+  for (const k of cells) {
+    if (seen.has(k)) continue;
+    const group = new Set<string>([k]);
+    const stack = [k];
+    seen.add(k);
+    while (stack.length) {
+      const [x, y] = stack.pop()!.split(",").map(Number);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nk = (x + dx) + "," + (y + dy);
+        if (cells.has(nk) && !seen.has(nk)) { seen.add(nk); group.add(nk); stack.push(nk); }
+      }
+    }
+    if (group.size > best.size) best = group;
+  }
+  // Fill interior holes: flood water from the border; unreached
+  // water is inside the island and becomes land.
+  const water = new Set<string>();
+  const stack: string[] = [];
+  for (let x = 0; x < w; x++) { stack.push(x + ",0", x + "," + (h - 1)); }
+  for (let y = 0; y < h; y++) { stack.push("0," + y, (w - 1) + "," + y); }
+  while (stack.length) {
+    const k = stack.pop()!;
+    if (water.has(k) || best.has(k)) continue;
+    water.add(k);
+    const [x, y] = k.split(",").map(Number);
+    if (x > 0) stack.push((x - 1) + "," + y);
+    if (x < w - 1) stack.push((x + 1) + "," + y);
+    if (y > 0) stack.push(x + "," + (y - 1));
+    if (y < h - 1) stack.push(x + "," + (y + 1));
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const k = x + "," + y;
+    if (!water.has(k)) best.add(k);
+  }
+  for (const k of mustKeep) best.add(k);
+  return best;
+}
+
+function rectCells(w: number, h: number): Set<string> {
+  const cells = new Set<string>();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) cells.add(x + "," + y);
+  return cells;
 }
 
 export interface CityBuilding {
@@ -68,8 +173,13 @@ export function layoutCity(extraction: Extraction): CityLayout {
   for (const isl of islands) {
     const files = (byIsland.get(isl.id) ?? []).slice().sort((a, b) => a.path.localeCompare(b.path));
     if (files.length === 0) continue;
-    const cols = Math.ceil(Math.sqrt(files.length));
-    const rows = Math.ceil(files.length / cols);
+    // A test-only island does not earn land by file count (owner
+    // call, 2026-10-27): backend/tests held 103 files and was the
+    // biggest island on the map while saying the least. It gets a
+    // compact 3x2-plot islet; its pennants stack inside.
+    const testOnly = files.every((f) => f.building === "pennant");
+    const cols = testOnly ? 3 : Math.ceil(Math.sqrt(files.length));
+    const rows = testOnly ? 2 : Math.ceil(files.length / cols);
     if (cursorX > 0 && cursorX + cols > shelfPlots) {
       cursorX = 0;
       cursorY += shelfH + GAP_PLOTS;
@@ -77,6 +187,28 @@ export function layoutCity(extraction: Extraction): CityLayout {
     }
     const x = cursorX * PLOT;
     const y = cursorY * PLOT;
+    // Occupied plot cells in island-local coords: the shape must
+    // keep every one of them as land.
+    const mustKeep = new Set<string>();
+    files.forEach((f, i) => {
+      const lx = testOnly ? i % (cols * PLOT) : (i % cols) * PLOT;
+      const ly = testOnly ? Math.floor(i / (cols * PLOT)) % (rows * PLOT) : Math.floor(i / cols) * PLOT;
+      for (let dy = 0; dy < (testOnly ? 1 : PLOT); dy++)
+        for (let dx = 0; dx < (testOnly ? 1 : PLOT); dx++) mustKeep.add(lx + dx + "," + (ly + dy));
+    });
+    // The shape runs over the plot area plus a one-cell shore
+    // margin on every side. Buildings keep one free cell around
+    // them (DESIGN.md layout rule), and the margin is where the
+    // organic outline can actually cut: without it, edge plots
+    // force a rectangle.
+    const localShape = islandShape(isl.id, cols * PLOT + 2, rows * PLOT + 2, new Set([...mustKeep].map((k) => {
+      const [lx, ly] = k.split(",").map(Number);
+      return lx + 1 + "," + (ly + 1);
+    })));
+    const cells = new Set<string>([...localShape].map((k) => {
+      const [lx, ly] = k.split(",").map(Number);
+      return x + lx - 1 + "," + (y + ly - 1);
+    }));
     const island: CityIsland = {
       id: isl.id,
       name: isl.name,
@@ -87,11 +219,16 @@ export function layoutCity(extraction: Extraction): CityLayout {
       rows,
       gate: { gx: x, gy: y },
       center: { gx: x + (cols * PLOT) / 2, gy: y + (rows * PLOT) / 2 },
+      cells,
+      testOnly,
+      testCount: testOnly ? files.length : 0,
     };
     placed.push(island);
     files.forEach((f, i) => {
-      const gx = x + (i % cols) * PLOT;
-      const gy = y + Math.floor(i / cols) * PLOT;
+      const gx = testOnly ? x + (i % (cols * PLOT)) : x + (i % cols) * PLOT;
+      const gy = testOnly
+        ? y + (Math.floor(i / (cols * PLOT)) % (rows * PLOT))
+        : y + Math.floor(i / cols) * PLOT;
       buildings.push({ file: f.path, islandId: isl.id, building: f.building, gx, gy });
       fileToIsland.set(f.path, isl.id);
       filePos.set(f.path, { gx, gy, islandId: isl.id });

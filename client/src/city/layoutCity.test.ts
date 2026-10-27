@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bridgeChevron, bridgeSpan, cityBridgeDeck, layoutCity, PLOT, plotDepth } from "./layoutCity";
+import { bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -194,5 +194,35 @@ describe("bridgeChevron direction", () => {
     const rev = bridgeChevron([span[1], span[0]], cityBridgeDeck([span[1], span[0]], 5));
     expect(rev.tip.gx).toBeLessThan(fwd.tip.gx);
     expect(rev.tip.gy).toBeLessThan(fwd.tip.gy);
+  });
+});
+
+describe("organic island shape", () => {
+  it("is deterministic, keeps every building plot on land, and cuts some shore", () => {
+    const keep = new Set<string>();
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) keep.add(x + "," + y);
+    const a = islandShape("backend/app/modules/sales", 16, 14, keep);
+    const b = islandShape("backend/app/modules/sales", 16, 14, keep);
+    expect([...a].sort()).toEqual([...b].sort());
+    for (const k of keep) expect(a.has(k)).toBe(true);
+    expect(a.size).toBeLessThan(16 * 14); // some shore was cut
+    expect(a.size).toBeGreaterThan(40); // and the island remains
+  });
+
+  it("a test-only island is compact no matter how many test files it holds", () => {
+    const big = {
+      ...EXTRACTION,
+      islands: [{ id: "tests", name: "tests", path: "tests", file_count: 103, files: [] }],
+      files: Array.from({ length: 103 }, (_, i) => ({
+        path: `tests/t${i}.ts`, island_id: "tests", roles: [], building: "pennant", import_count: 0, importer_count: 0,
+      })),
+      bridges: [],
+    } as Extraction;
+    const layout = layoutCity(big);
+    const [isl] = layout.islands;
+    expect(isl.testOnly).toBe(true);
+    expect(isl.testCount).toBe(103);
+    expect(isl.cols * isl.rows).toBeLessThanOrEqual(6);
+    expect(layout.buildings).toHaveLength(103);
   });
 });
