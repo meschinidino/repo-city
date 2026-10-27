@@ -40,8 +40,11 @@ export class LiveError extends Error {
 async function jsonOrThrow(res: Response): Promise<unknown> {
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    if (typeof body.error === "string") throw new LiveError("refused", body.error);
-    throw new LiveError("server-error", `server answered ${res.status} without an error message`);
+    // Only a 4xx is a refusal of this request; a 5xx is the
+    // server's own failure even when it carries a message, and
+    // "fix the repo path" is the wrong advice for it.
+    if (res.status < 500 && typeof body.error === "string") throw new LiveError("refused", body.error);
+    throw new LiveError("server-error", body.error ?? `server answered ${res.status} without an error message`);
   }
   return res.json().catch(() => {
     throw new LiveError("not-json", "the answer was not JSON");
@@ -57,10 +60,10 @@ async function fetched(url: string, init?: RequestInit): Promise<Response> {
 }
 
 /**
- * Failure text for the extraction load. A network failure (the
- * server is down) and a server refusal (bad repo path) need
- * different recovery instructions; mixing them up sends the user
- * to restart a healthy server.
+ * Failure text for a live call. A network failure (the server is
+ * down or refusing this origin) and a server refusal (bad repo
+ * path) need different recovery instructions; mixing them up
+ * sends the user to restart a healthy server.
  */
 export function loadFailureText(server: string, e: Error, what = "open that repo"): string {
   const kind = e instanceof LiveError ? e.kind : e instanceof TypeError ? "unreachable" : "refused";

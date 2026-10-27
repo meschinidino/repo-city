@@ -53,6 +53,16 @@ describe("load failure classification (stubbed fetch)", () => {
     expect(loadFailureText(SERVER, e)).toContain("server errored");
   });
 
+  it("500 with an error body → still server errored, not fix the path", async () => {
+    stubFetch(() =>
+      Promise.resolve(new Response(JSON.stringify({ error: "session store failed" }), { status: 500 })),
+    );
+    const e = await failureOf(fetchExtraction(SERVER, "/repo"));
+    const text = loadFailureText(SERVER, e);
+    expect(text).toContain("server errored");
+    expect(text).not.toContain("Fix the repo path");
+  });
+
   it("200 with HTML (wrong server) → not Repo City JSON", async () => {
     stubFetch(() => Promise.resolve(new Response("<html>vite</html>", { status: 200 })));
     const e = await failureOf(fetchExtraction(SERVER, "/repo"));

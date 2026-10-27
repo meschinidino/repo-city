@@ -5,7 +5,7 @@ import { occlusion } from "./map/placement";
 import { PASS } from "./map/checks";
 import { layoutCity } from "./city/layoutCity";
 import { CityView } from "./city/renderCity";
-import { connectEvents, createSession, fetchExtraction, fetchReport, loadFailureText, stopSession } from "./city/live";
+import { connectEvents, createSession, fetchExtraction, fetchReport, loadFailureText, stopSession, type SessionInfo } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -83,7 +83,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   (canvas as HTMLCanvasElement).style.width = "100%";
   (canvas as HTMLCanvasElement).style.height = "auto";
 
-  let session;
+  let session: SessionInfo;
   try {
     session = await createSession(server, repo, {
       task: params.get("task") ?? undefined,
