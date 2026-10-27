@@ -65,12 +65,12 @@ test.beforeAll(async () => {
     // Skip ports something already answers on: that responder is
     // foreign by definition, and racing its /health against our
     // process's bind failure would accept the wrong server.
-    const occupied = await fetch(`${candidate}/health`).then((r) => r.ok).catch(() => false);
+    const occupied = await fetch(`${candidate}/health`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok).catch(() => false);
     if (occupied) continue;
     serverProc = spawn(bin, ["--port", String(port), "--db", join(workRoot, "e2e.db")], { stdio: "ignore" });
     for (let i = 0; i < 25 && !SERVER; i++) {
       try {
-        const res = await fetch(`${candidate}/health`);
+        const res = await fetch(`${candidate}/health`, { signal: AbortSignal.timeout(1000) });
         if (res.ok && serverProc.exitCode === null) {
           // Let a bind failure surface before trusting the answer.
           await new Promise((r) => setTimeout(r, 300));
