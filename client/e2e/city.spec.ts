@@ -102,7 +102,7 @@ test("city gate journey (watcher-driven, no agent): islands, lit building, repor
   });
   expect(islands).toEqual(["@fixture/api", "@fixture/cli", "@fixture/shared", "@fixture/web"]);
 
-  // Design review fix: the camera zooms (DESIGN.md zoom levels), so
+  // Design review fix: the camera zooms geometrically, so
   // island labels are reachable at readable size instead of being
   // stuck at fit-to-screen scale.
   const scaleBefore = await page.evaluate(() => (window as unknown as { __city: { city: { cameraScale: number } } }).__city.city.cameraScale);
