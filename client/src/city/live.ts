@@ -62,7 +62,7 @@ async function fetched(url: string, init?: RequestInit): Promise<Response> {
  * different recovery instructions; mixing them up sends the user
  * to restart a healthy server.
  */
-export function loadFailureText(server: string, e: Error): string {
+export function loadFailureText(server: string, e: Error, what = "open that repo"): string {
   const kind = e instanceof LiveError ? e.kind : e instanceof TypeError ? "unreachable" : "refused";
   switch (kind) {
     case "unreachable":
@@ -74,7 +74,7 @@ export function loadFailureText(server: string, e: Error): string {
     case "server-error":
       return `The Repo City server errored: ${e.message}. Check its terminal output. Nothing was rendered from invented data.`;
     case "refused":
-      return `The Repo City server refused to open that repo: ${e.message}. Fix the repo path and reload. Nothing was rendered from invented data.`;
+      return `The Repo City server refused to ${what}: ${e.message}. Fix the repo path and reload. Nothing was rendered from invented data.`;
   }
 }
 

@@ -83,12 +83,17 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   (canvas as HTMLCanvasElement).style.width = "100%";
   (canvas as HTMLCanvasElement).style.height = "auto";
 
-  const session = await createSession(server, repo, {
-    task: params.get("task") ?? undefined,
-    spawn: params.get("spawn") === "1",
-  }).catch((e: Error) => {
-    throw new Error(`could not create a session on ${server}: ${e.message}`);
-  });
+  let session;
+  try {
+    session = await createSession(server, repo, {
+      task: params.get("task") ?? undefined,
+      spawn: params.get("spawn") === "1",
+    });
+  } catch (e) {
+    status.textContent = loadFailureText(server, e as Error, "create a session");
+    status.classList.add("fail");
+    return;
+  }
   // No island is chosen at creation (quest targeting is T12), so the
   // ship has no home: it stays off-screen until a real event places
   // it. Drawing it at the biggest island would invent a location.
