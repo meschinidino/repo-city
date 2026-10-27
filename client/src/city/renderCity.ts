@@ -3,7 +3,7 @@ import type { World } from "../map/pipeline";
 import { PLAIN_GRASS_INDEX } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeSpan, cityProjector, PLOT, type CityLayout } from "./layoutCity";
+import { bridgeChevron, bridgeSpan, cityBridgeDeck, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -202,11 +202,26 @@ export class CityView {
     }
     root.addChild(shore);
 
-    // bridges shore-to-shore (never across the land they connect),
-    // width grows with import count
+    // Bridges at city scale are shore-to-shore strokes (PR #12),
+    // one per unordered island pair at the wider direction's width,
+    // with a lane-gold chevron per direction drawn later. Full deck
+    // bridges (the test map's) were tried in this PR and reverted
+    // by owner call: 381 decks carpeted the sea and the archipelago
+    // stopped reading as islands in open water. Deck treatment at
+    // island zoom is a step-4 (T12) zoom-semantics question.
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
     const bridges = new Graphics();
+    const deckList: { span: [{ gx: number; gy: number }, { gx: number; gy: number }]; deck: ReturnType<typeof cityBridgeDeck> }[] = [];
+    const pairs = new Map<string, { count: number; dirs: CityLayout["bridges"] }>();
     for (const br of this.layout.bridges) {
+      const key = [br.from, br.to].sort().join("|");
+      const pair = pairs.get(key) ?? { count: 0, dirs: [] };
+      pair.count = Math.max(pair.count, br.count);
+      pair.dirs.push(br);
+      pairs.set(key, pair);
+    }
+    for (const pair of pairs.values()) {
+      const br = pair.dirs[0];
       const a = byId.get(br.from);
       const b = byId.get(br.to);
       if (!a || !b) continue;
@@ -215,16 +230,35 @@ export class CityView {
         { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
       );
       if (!span) continue;
+      const deck = cityBridgeDeck(span, pair.count);
       const [ax, ay] = proj.project(span[0].gx, span[0].gy);
       const [bx, by] = proj.project(span[1].gx, span[1].gy);
       bridges.moveTo(ax, ay);
       bridges.lineTo(bx, by);
-      bridges.stroke({ color: 0xb98652, alpha: 0.55, width: Math.min(6, 1.5 + Math.log2(br.count + 1)) });
+      bridges.stroke({ color: 0xb98652, alpha: 0.55, width: Math.min(6, 1.5 + Math.log2(pair.count + 1)) });
+      for (const dir of pair.dirs) {
+        deckList.push({ span: dir.from === br.from ? span : [span[1], span[0]], deck });
+      }
     }
     root.addChild(bridges);
 
     // buildings, one sprite per file, placed by its plate footprint
     for (const b of this.layout.buildings) {
+      if (b.building === "pennant") {
+        // Test files are not buildings (DESIGN.md): a small flag on
+        // a pole at the plot centre, in the island's depth order.
+        const [fx, fy] = proj.project(b.gx + PLOT / 2, b.gy + PLOT / 2);
+        const g = new Graphics();
+        g.moveTo(fx, fy);
+        g.lineTo(fx, fy - TW * 0.55);
+        g.stroke({ color: 0x7a5432, width: Math.max(1, TW * 0.03) });
+        g.poly([fx, fy - TW * 0.55, fx + TW * 0.34, fy - TW * 0.44, fx, fy - TW * 0.33]);
+        g.fill({ color: 0xe8cf92 });
+        const c = new Container();
+        c.addChild(g);
+        items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
+        continue;
+      }
       const key = BUILDING_SPRITE[b.building] ?? "cottage";
       const sprite = this.world.sprites.find((s) => s.key === key) ?? this.world.sprites.find((s) => s.key === "cottage");
       const texture = this.tex(key);
@@ -246,10 +280,25 @@ export class CityView {
       s.position.set(fx - pcx * scale, fy - pcy * scale);
       const c = new Container();
       c.addChild(s);
-      items.push({ depth: b.gx + b.gy + 0.6, kind: 1, node: c });
+      items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
     }
 
     items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
+
+    // Direction chevrons last among the static layers, so a
+    // shoreline arrow is not buried under the island it points at.
+    const chevrons = new Graphics();
+    for (const { span, deck } of deckList) {
+      const ch = bridgeChevron(span, deck);
+      const tip = proj.project(ch.tip.gx, ch.tip.gy);
+      const wa = proj.project(ch.wingA.gx, ch.wingA.gy);
+      const wb = proj.project(ch.wingB.gx, ch.wingB.gy);
+      chevrons.moveTo(wa[0], wa[1]);
+      chevrons.lineTo(tip[0], tip[1]);
+      chevrons.lineTo(wb[0], wb[1]);
+    }
+    chevrons.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
+    root.addChild(chevrons);
 
     // island labels
     for (const isl of this.layout.islands) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bridgeSpan, layoutCity, PLOT } from "./layoutCity";
+import { bridgeChevron, bridgeSpan, cityBridgeDeck, layoutCity, PLOT, plotDepth } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -156,5 +156,43 @@ describe("bridgeSpan directions and degenerate cases", () => {
   });
   it("an island to itself has no span", () => {
     expect(bridgeSpan(a, a)).toBeNull();
+  });
+});
+
+describe("plotDepth and cityBridgeDeck (user feedback 2026-10-27)", () => {
+  it("building depth beats every ground tile on its own plot", () => {
+    // Ground tiles draw at gx+gy; a building must sort after the
+    // front row of its 2x2 plot or short sprites sink under it.
+    expect(plotDepth(4, 6)).toBeGreaterThan(4 + 1 + (6 + 1));
+    expect(plotDepth(4, 6)).toBe(4 + PLOT - 1 + (6 + PLOT - 1) + 0.6);
+  });
+  it("deck corners sit one half-width off the span axis", () => {
+    const deck = cityBridgeDeck([{ gx: 0, gy: 0 }, { gx: 10, gy: 0 }], 3);
+    expect(deck.len).toBe(10);
+    const [c0, , c2] = deck.corners;
+    expect(Math.abs(c0.gy)).toBeCloseTo(Math.hypot(deck.perp.gx, deck.perp.gy), 6);
+    expect(c2.gy).toBeCloseTo(-c0.gy, 6);
+    expect(cityBridgeDeck([{ gx: 0, gy: 0 }, { gx: 10, gy: 0 }], 128).perp.gy).toBeGreaterThan(deck.perp.gy);
+  });
+});
+
+describe("bridgeChevron direction", () => {
+  const span: [{ gx: number; gy: number }, { gx: number; gy: number }] = [{ gx: 0, gy: 0 }, { gx: 8, gy: 6 }];
+  it("points toward the imported island on a diagonal span", () => {
+    const deck = cityBridgeDeck(span, 5);
+    const ch = bridgeChevron(span, deck);
+    // tip is further along the span direction than both wings
+    const along = (p: { gx: number; gy: number }) => p.gx * 0.8 + p.gy * 0.6;
+    expect(along(ch.tip)).toBeGreaterThan(along(ch.wingA));
+    expect(along(ch.tip)).toBeGreaterThan(along(ch.wingB));
+    // wings stay within the deck half-width (inside the rails)
+    const hw = Math.hypot(deck.perp.gx, deck.perp.gy);
+    expect(Math.hypot(ch.wingA.gx - ch.wingB.gx, ch.wingA.gy - ch.wingB.gy) / 2).toBeLessThanOrEqual(hw);
+  });
+  it("reverses when the span reverses (two-way import)", () => {
+    const fwd = bridgeChevron(span, cityBridgeDeck(span, 5));
+    const rev = bridgeChevron([span[1], span[0]], cityBridgeDeck([span[1], span[0]], 5));
+    expect(rev.tip.gx).toBeLessThan(fwd.tip.gx);
+    expect(rev.tip.gy).toBeLessThan(fwd.tip.gy);
   });
 });

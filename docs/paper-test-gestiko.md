@@ -38,19 +38,23 @@ http://localhost:5173/?repo=/tmp/GestiKo&server=http://127.0.0.1:8787
 
 ## District answer key (from the live extraction, 600 files)
 
-Measured 2026-10-27 against the `/tmp/GestiKo` clone: 43 islands,
-234 bridges. Largest districts a viewer should find:
+Measured 2026-10-27 against the `/tmp/GestiKo` clone: 60 islands,
+381 bridges. (Was 43/234 before the remainder split the same day:
+the parent islands `backend`/`frontend` were remainder buckets —
+215 and 103 files of tests, migrations and core code wearing one
+name. They are now split by directory, and test files are pennants,
+not buildings.) Largest districts a viewer should find:
 
 | Island | Files | What the name says it holds |
 |---|---|---|
-| `backend` (root) | 215 | the Python backend outside its modules |
-| `frontend` (root) | 103 | the TS frontend outside its features |
+| `backend/tests` | 103 | the Python backend's tests (pennant flags, not buildings) |
+| `backend/alembic` | 68 | database migrations |
+| `frontend/tests` | 57 | the TS frontend's tests (pennants) |
 | `backend/app/modules/sales` | 24 | sales |
 | `backend/app/modules/price_lists` | 22 | price lists |
 | `frontend/src/features/sales` | 21 | sales UI |
 | `backend/app/modules/purchases` | 20 | purchases |
-| `backend/app/modules/commercial` | 14 | commercial |
-| `frontend/src/features/commercial` | 11 | commercial UI |
+| `backend/app/integrations` | 19 | external integrations (ARCA) |
 
 Purposes in the right column are read off directory names only —
 that is exactly what the test checks a fresh viewer can do.
