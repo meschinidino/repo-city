@@ -46,7 +46,9 @@ export async function createSession(
 ): Promise<SessionInfo> {
   const res = await fetch(`${server}/api/sessions`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    // The custom header forces a CORS preflight, so a random web
+    // page cannot create sessions with a simple cross-origin POST.
+    headers: { "content-type": "application/json", "x-repo-city": "1" },
     body: JSON.stringify({
       repo_path: repo,
       task: opts.task,
@@ -58,7 +60,10 @@ export async function createSession(
 }
 
 export async function stopSession(server: string, sessionId: string): Promise<void> {
-  const res = await fetch(`${server}/api/sessions/${sessionId}/stop`, { method: "POST" });
+  const res = await fetch(`${server}/api/sessions/${sessionId}/stop`, {
+    method: "POST",
+    headers: { "x-repo-city": "1" },
+  });
   await jsonOrThrow(res);
 }
 

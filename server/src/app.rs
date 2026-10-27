@@ -231,6 +231,35 @@ fn err(status: StatusCode, msg: String) -> (StatusCode, Json<serde_json::Value>)
     (status, Json(serde_json::json!({ "error": msg })))
 }
 
+/// Browser boundary for this local tool: pages may only talk to the
+/// server from the Vite dev origins. Mutating POSTs additionally
+/// require the `x-repo-city` header — a cross-site form POST cannot
+/// set it (and setting it forces a CORS preflight), which closes
+/// the CSRF hole that CORS alone leaves open. Non-browser clients
+/// (curl, tests) send no Origin and are bound to loopback anyway.
+const DEV_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5173"];
+
+fn origin_allowed(headers: &axum::http::HeaderMap) -> bool {
+    match headers.get(axum::http::header::ORIGIN) {
+        None => true,
+        Some(origin) => origin
+            .to_str()
+            .map(|o| DEV_ORIGINS.contains(&o))
+            .unwrap_or(false),
+    }
+}
+
+fn mutation_allowed(headers: &axum::http::HeaderMap) -> bool {
+    // Browsers always send Origin on POST: those requests must come
+    // from a dev origin and carry the header. Headerless local
+    // clients (curl, tests) reach a loopback-only server already.
+    if headers.contains_key(axum::http::header::ORIGIN) {
+        origin_allowed(headers) && headers.contains_key("x-repo-city")
+    } else {
+        true
+    }
+}
+
 #[derive(Deserialize)]
 struct ExtractionQuery {
     path: String,
@@ -266,8 +295,16 @@ struct CreateSession {
 
 async fn create_session(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<CreateSession>,
 ) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(
+            StatusCode::FORBIDDEN,
+            "browser mutations need a dev origin and the x-repo-city header".to_string(),
+        )
+        .into_response();
+    }
     let root = PathBuf::from(&body.repo_path);
     if !root.is_dir() {
         return err(
@@ -548,8 +585,16 @@ async fn session_report(
 
 async fn stop_session(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(
+            StatusCode::FORBIDDEN,
+            "browser mutations need a dev origin and the x-repo-city header".to_string(),
+        )
+        .into_response();
+    }
     match state.store.get_session(&id) {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -605,10 +650,22 @@ struct WsQuery {
 
 async fn ws_handler(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<WsQuery>,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    upgrade.on_upgrade(move |socket| ws_socket(state, q.since_id, socket))
+    // CORS does not apply to WebSockets: check the Origin here so a
+    // random page cannot read the full event stream.
+    if !origin_allowed(&headers) {
+        return err(
+            StatusCode::FORBIDDEN,
+            "websocket origin not allowed".to_string(),
+        )
+        .into_response();
+    }
+    upgrade
+        .on_upgrade(move |socket| ws_socket(state, q.since_id, socket))
+        .into_response()
 }
 
 async fn ws_socket(state: Arc<AppState>, since_id: i64, socket: WebSocket) {

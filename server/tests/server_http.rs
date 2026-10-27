@@ -52,6 +52,26 @@ async fn watcher_events_flow_over_http_and_websocket() {
         .unwrap();
     assert_eq!(extraction["counts"]["files_parsed"], 12);
 
+    // Browser boundary: a cross-site Origin cannot mutate, and the
+    // dev origin without the client header (a form POST) cannot
+    // either. Headerless local clients still can.
+    let csrf = client
+        .post(format!("{base}/api/sessions"))
+        .header("origin", "https://evil.example")
+        .json(&serde_json::json!({"repo_path": dir.path().to_string_lossy()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(csrf.status(), reqwest::StatusCode::FORBIDDEN);
+    let form_post = client
+        .post(format!("{base}/api/sessions"))
+        .header("origin", "http://localhost:5173")
+        .json(&serde_json::json!({"repo_path": dir.path().to_string_lossy()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(form_post.status(), reqwest::StatusCode::FORBIDDEN);
+
     let session: serde_json::Value = client
         .post(format!("{base}/api/sessions"))
         .json(
@@ -92,6 +112,21 @@ async fn watcher_events_flow_over_http_and_websocket() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(saw_touch, "watcher never reported the shell-only edit");
+
+    // A browser page from another origin cannot read the stream.
+    let bad_ws = format!("{}/ws?since_id=0", base.replace("http://", "ws://"));
+    let bad_req = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+        bad_ws.as_str(),
+    )
+    .map(|mut r| {
+        r.headers_mut().insert(
+            "origin",
+            tokio_tungstenite::tungstenite::http::HeaderValue::from_static("https://evil.example"),
+        );
+        r
+    })
+    .unwrap();
+    assert!(tokio_tungstenite::connect_async(bad_req).await.is_err());
 
     // WebSocket replay from the start of the log includes both events.
     let ws_url = format!("{}/ws?since_id=0", base.replace("http://", "ws://"));

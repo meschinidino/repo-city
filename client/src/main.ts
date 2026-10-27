@@ -126,6 +126,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   // Reconnecting stream: resume after the last event id seen; the
   // reducer ignores replayed duplicates by sequence.
   let lastEventId = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   const connect = () => {
     connectEvents(
       server,
@@ -141,12 +142,19 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
       },
       (state) => {
         if (state === "open") {
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = undefined;
           status.classList.remove("fail");
           refresh();
-        } else {
+        } else if (!reconnectTimer) {
+          // error and close both fire for one dead socket: schedule
+          // exactly one reconnect, never a doubling tree of them.
           status.classList.add("fail");
           refresh(" · connection lost — reconnecting, picture may be stale");
-          setTimeout(connect, 1000);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = undefined;
+            connect();
+          }, 1000);
         }
       },
     );

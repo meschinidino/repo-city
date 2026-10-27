@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
-import { cpSync, appendFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, appendFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -13,8 +13,7 @@ import { join, resolve } from "node:path";
  * proves the watcher/report path, not live-agent behavior.
  */
 
-const SERVER_PORT = 8800 + Math.floor(Math.random() * 400);
-const SERVER = `http://127.0.0.1:${SERVER_PORT}`;
+let SERVER = "";
 let serverProc: ChildProcess | undefined;
 let repoDir = "";
 let workRoot = "";
@@ -31,7 +30,14 @@ test.beforeAll(async () => {
   test.setTimeout(290_000);
   const serverDir = resolve(process.cwd(), "../server");
   const bin = join(serverDir, "target/debug/repo-city-server-bin");
-  if (!existsSync(bin)) {
+  // Never test against a stale binary: rebuild when the server
+  // sources are newer than it.
+  const newestSource = Math.max(
+    statSync(join(serverDir, "Cargo.toml")).mtimeMs,
+    statSync(join(serverDir, "src/app.rs")).mtimeMs,
+    statSync(join(serverDir, "src/lib.rs")).mtimeMs,
+  );
+  if (!existsSync(bin) || statSync(bin).mtimeMs < newestSource) {
     execSync("cargo build --bin repo-city-server-bin", {
       cwd: serverDir,
       env: { ...process.env, PATH: `${process.env.HOME}/.cargo/bin:${process.env.PATH}` },
@@ -45,15 +51,24 @@ test.beforeAll(async () => {
   git(["init", "-q"]);
   git(["add", "."]);
   git(["commit", "-qm", "fixture"]);
-  serverProc = spawn(join(serverDir, "target/debug/repo-city-server-bin"), ["--port", String(SERVER_PORT), "--db", join(workRoot, "e2e.db")], { stdio: "ignore" });
-  for (let i = 0; i < 50; i++) {
-    try {
-      const res = await fetch(`${SERVER}/health`);
-      if (res.ok) return;
-    } catch { /* not up yet */ }
-    await new Promise((r) => setTimeout(r, 200));
+  // Random port with retries: a taken port is bad luck, not a failure.
+  for (let attempt = 0; attempt < 5 && !SERVER; attempt++) {
+    const port = 8800 + Math.floor(Math.random() * 400);
+    const candidate = `http://127.0.0.1:${port}`;
+    serverProc = spawn(bin, ["--port", String(port), "--db", join(workRoot, "e2e.db")], { stdio: "ignore" });
+    for (let i = 0; i < 25; i++) {
+      try {
+        const res = await fetch(`${candidate}/health`);
+        if (res.ok) {
+          SERVER = candidate;
+          break;
+        }
+      } catch { /* not up yet */ }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (!SERVER) serverProc.kill();
   }
-  throw new Error("repo-city server did not come up");
+  if (!SERVER) throw new Error("repo-city server did not come up");
 });
 
 test.afterAll(() => {
