@@ -5,7 +5,7 @@ import { occlusion } from "./map/placement";
 import { PASS } from "./map/checks";
 import { layoutCity } from "./city/layoutCity";
 import { CityView } from "./city/renderCity";
-import { connectEvents, createSession, fetchExtraction, fetchReport, stopSession } from "./city/live";
+import { connectEvents, createSession, fetchExtraction, fetchReport, loadFailureText, stopSession, type SessionInfo } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -72,7 +72,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   try {
     extraction = await fetchExtraction(server, repo);
   } catch (e) {
-    status.textContent = `Could not reach the Repo City server at ${server} (${(e as Error).message}). Start it with: cargo run --bin repo-city-server-bin (in server/). Nothing was rendered from invented data.`;
+    status.textContent = loadFailureText(server, e as Error);
     status.classList.add("fail");
     return;
   }
@@ -83,10 +83,17 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   (canvas as HTMLCanvasElement).style.width = "100%";
   (canvas as HTMLCanvasElement).style.height = "auto";
 
-  const session = await createSession(server, repo, {
-    task: params.get("task") ?? undefined,
-    spawn: params.get("spawn") === "1",
-  });
+  let session: SessionInfo;
+  try {
+    session = await createSession(server, repo, {
+      task: params.get("task") ?? undefined,
+      spawn: params.get("spawn") === "1",
+    });
+  } catch (e) {
+    status.textContent = loadFailureText(server, e as Error, "create a session");
+    status.classList.add("fail");
+    return;
+  }
   // No island is chosen at creation (quest targeting is T12), so the
   // ship has no home: it stays off-screen until a real event places
   // it. Drawing it at the biggest island would invent a location.
