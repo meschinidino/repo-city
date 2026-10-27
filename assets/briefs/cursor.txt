@@ -1,0 +1,13 @@
+Mouse cursor — Repo City sprite pipeline brief
+
+Goal: one small custom mouse cursor the page uses (CSS cursor), so
+the pointer stays easy to see over sea, grass, and bridges.
+
+Make: a single chunky golden-brass pointer, harbor style: a short
+arrow with a small ship-anchor notch in its tail. Thick dark outline,
+bright warm gold fill, one small white highlight. Flat game icon
+style, no gradients that wash out at small size, readable at 32 px.
+
+Background: solid magenta #FF00FF, no shadow, no text, no other
+objects. Cursor points to the upper-left corner of the frame; tip
+close to that corner, whole cursor inside the frame.

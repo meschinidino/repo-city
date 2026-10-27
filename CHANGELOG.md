@@ -7,7 +7,6 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 ### Changed — docs sync (2026-10-27)
 - Fixed dead doc claims found in a doc audit: README no longer says "no application code yet" (it says step 4 of 8, version 0.2.0); AGENTS.md lists the real test commands; ROADMAP marks step 3 done and step 4 in progress with T5 done; DESIGN.md, `specs/design.md` and `specs/test-plan.md` record the approved command-bar variant A; `specs/step4-plan.md` status matches its decisions; working notes carry a dated update for the 60-island counts. Released changelog entries were not touched.
 - Note for the canonical copies: `specs/design.md` and `specs/test-plan.md` were edited in the repo. Their canonical copies in `~/.gstack/projects/meta-hackathon/` need the same edits.
-=======
 ### Changed — map visuals (owner order: coast, cliffs, shape; on `feat/map-visual-fixes`, not merged)
 - Step 1: the city renderer now uses the spike coast autotiling (`map/coast.ts`): every land cell picks its fitted coast tile from its water neighbors. The hand-drawn sand ring is gone.
 - Step 2: code-drawn rock cliff faces under the two front shore edges of every shore cell.
@@ -17,7 +16,7 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 - Owner round 2: cliffs only where the land behind the shore is thick (thin shores stay beach); trees on free inner land cells (no mountain sprite exists in the sheets; a mountain sheet is future sprite-pipeline work); smarter placement: strongest island takes the centre, each next island takes the best free spot near its neighbours, with seeded jitter.
 - Numbers: Vitest 63 pass, tsc clean, Playwright 3 pass.
 - Owner round 3: buildings inside an island are arranged, not row-major. The landmark kind (keep, then silos, sea gate, lighthouse) takes the centre plot; the rest, most common kind first, take the free plot with the fewest same-kind neighbours. Cottages vary: one in three takes the slate roof, by file hash. Vitest 65 pass.
->>>>>>> 48e3c3f (Map visuals in owner order: coast tiles, cliffs, organic outlines, compact test islets, D-zoom bridges)
+- Owner round 4: strong bridges (15+ imports) now draw with the new bridge sprite (`assets/sprites/bridge.png`, owner pick run 1; brief in `assets/briefs/bridge.txt`). Segments repeat along the span and turn to the span angle. Weak pairs keep slim lines, so the sea stays open and there is no bridge carpet. Direction pulses are now a glow that runs on the deck itself, importer toward imported, strong decks only. New gold anchor cursor (`client/public/cursor.png`, owner pick run 1) for the canvas and the button. Island meaning text: left for its roadmap step, by owner decision. Vitest 65 pass, tsc clean.
 
 
 ### Added — T5 session lifecycle (step 4, server first)

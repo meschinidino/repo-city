@@ -1,0 +1,21 @@
+Bridge deck texture — Repo City sprite pipeline brief
+
+Goal: a tileable wooden bridge deck texture the renderer uses as the
+fill of the code-drawn bridge polygon, so close-up bridges read as
+built wood, not a flat brown polygon.
+
+Reference attached: a current close-up screenshot of the map. Match
+its art: stylized low-poly game art, warm soft light from the upper
+left, matte wood, colors close to the buildings sheet
+(assets/sprites/buildings.png).
+
+Make: one straight bridge deck segment seen from the same isometric
+angle as the map (diamond projection, long axis running lower-left
+to upper-right). Wooden planks across the deck, two side rails with
+posts, rope detail under the rails, warm brown wood with visible
+plank seams. The deck must tile along its long axis: left and right
+ends match so segments can repeat.
+
+Background: solid magenta #FF00FF everywhere outside the deck, no
+shadow on the background, no text, no people, no water.
+One segment only, centered, filling most of the frame.

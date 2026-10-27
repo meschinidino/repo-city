@@ -1,4 +1,5 @@
-import { Application, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import bridgeUrl from "../../../assets/sprites/bridge.png";
 import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
@@ -33,6 +34,8 @@ export class CityView {
   private cam = { scale: 1, x: 0, y: 0 };
   private fitScale = 1;
   private bridgeGfx!: Graphics;
+  private bridgeSprites = new Container();
+  private bridgeTex: Texture | null = null;
   private pulseGfx!: Graphics;
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
@@ -90,16 +93,48 @@ export class CityView {
 
   /** Bridges by zoom level (D-zoom): at map zoom only strong pairs
    * (15+ imports, pinned from the GestiKo distribution: 24 of 381
-   * pairs, 41% of imports) draw, as slim decks. At island zoom
-   * every pair draws. Direction is a moving pulse, not a chevron. */
+   * pairs, 41% of imports) draw. At island zoom every pair draws.
+   * Drawn pairs use the bridge sprite (assets/sprites/bridge.png,
+   * owner pick run 1): segments repeat along the span and turn to
+   * the span angle. The sprite angle is fixed, so long spans in
+   * other directions are an approximation, not true perspective.
+   * Fallback with no texture: the old deck polygon / stroke. */
   private drawBridges(): void {
     const g = this.bridgeGfx;
     const proj = this.proj;
     g.clear();
+    for (const child of this.bridgeSprites.removeChildren()) child.destroy();
     for (const pair of this.bridgePairs) {
       const strong = pair.count >= 15;
       if (this.zoomLevel === "map" && !strong) continue;
-      if (strong) {
+      const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
+      const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
+      if (this.bridgeTex && strong) {
+        const tex = this.bridgeTex;
+        const len = Math.hypot(bx - ax, by - ay);
+        const [c0, c3] = [pair.deck.corners[0], pair.deck.corners[3]].map((c) => proj.project(c.gx, c.gy));
+        const deckW = Math.max(14, Math.hypot(c3[0] - c0[0], c3[1] - c0[1]));
+        // The deck axis in the source image runs lower-left to
+        // upper-right, about half the image height over its width.
+        const axisAngle = Math.atan2(-tex.height * 0.52, tex.width);
+        const axisLen = Math.hypot(tex.width, tex.height * 0.52);
+        // Scale so the sprite's width across the span matches the
+        // deck width, then repeat segments along the span. Sizing
+        // from the span length made decks far too wide.
+        const across = tex.width * Math.abs(Math.sin(axisAngle)) + tex.height * Math.abs(Math.cos(axisAngle));
+        const scale = (deckW * 2.6) / across;
+        const segs = Math.min(28, Math.max(1, Math.ceil(len / (axisLen * scale * 0.7))));
+        const angle = Math.atan2(by - ay, bx - ax);
+        for (let s = 0; s < segs; s++) {
+          const tm = (s + 0.5) / segs;
+          const spr = new Sprite(tex);
+          spr.anchor.set(0.5, 0.55);
+          spr.position.set(ax + (bx - ax) * tm, ay + (by - ay) * tm);
+          spr.rotation = angle - axisAngle;
+          spr.scale.set(scale);
+          this.bridgeSprites.addChild(spr);
+        }
+      } else if (strong) {
         const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
         g.poly(corners);
         g.fill({ color: 0xb98652, alpha: 0.92 });
@@ -108,8 +143,6 @@ export class CityView {
         g.moveTo(c3[0], c3[1]); g.lineTo(c2[0], c2[1]);
         g.stroke({ color: 0x7a5432, width: 2, alpha: 0.9 });
       } else {
-        const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
-        const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
         g.moveTo(ax, ay);
         g.lineTo(bx, by);
         g.stroke({ color: 0xcfa06a, alpha: 0.5, width: 2 });
@@ -117,26 +150,42 @@ export class CityView {
     }
   }
 
-  /** Direction pulses: one light dot per import direction travels
-   * the span, importer toward imported. Island zoom only. This is
-   * a reading aid, not an agent signal (DESIGN.md stillness rule:
-   * noted as a departure in the PR for owner judgement). */
+  /** Direction glow: a soft light runs on the bridge itself, from
+   * the importing island toward the imported island, with a short
+   * fading tail. Island zoom only. This is a reading aid, not an
+   * agent signal (DESIGN.md stillness rule: noted as a departure
+   * in the PR for owner judgement). */
   private drawPulses(nowMs: number): void {
     const g = this.pulseGfx;
     if (!g) return;
     g.clear();
     if (this.zoomLevel !== "island") return;
     const TW = 64;
+    const at = (span: { gx: number; gy: number }[], t: number): [number, number] =>
+      this.proj.project(span[0].gx + (span[1].gx - span[0].gx) * t, span[0].gy + (span[1].gy - span[0].gy) * t);
     let i = 0;
     for (const pair of this.bridgePairs) {
+      if (pair.count < 15) continue; // glow runs on real decks only
       for (const span of pair.dirs) {
         i++;
-        const t = ((nowMs / 6000) + i * 0.37) % 1;
-        const gx = span[0].gx + (span[1].gx - span[0].gx) * t;
-        const gy = span[0].gy + (span[1].gy - span[0].gy) * t;
-        const [px, py] = this.proj.project(gx, gy);
-        g.circle(px, py, TW * 0.085);
-        g.fill({ color: 0xffe3a3, alpha: 0.95 });
+        const t = ((nowMs / 5000) + i * 0.37) % 1;
+        const tail = Math.max(0, t - 0.16);
+        const [tx, ty] = at(span, tail);
+        const [hx, hy] = at(span, t);
+        g.moveTo(tx, ty);
+        g.lineTo(hx, hy);
+        g.stroke({ color: 0xffd98a, width: TW * 0.1, alpha: 0.22 });
+        for (let k = 5; k >= 1; k--) {
+          const tk = t - k * 0.028;
+          if (tk < 0) continue;
+          const [px, py] = at(span, tk);
+          g.circle(px, py, TW * (0.085 - k * 0.008));
+          g.fill({ color: 0xffe3a3, alpha: 0.1 + (5 - k) * 0.09 });
+        }
+        g.circle(hx, hy, TW * 0.17);
+        g.fill({ color: 0xffd98a, alpha: 0.16 });
+        g.circle(hx, hy, TW * 0.075);
+        g.fill({ color: 0xfff2c4, alpha: 0.95 });
       }
     }
   }
@@ -371,8 +420,10 @@ export class CityView {
         });
       }
     }
+    this.bridgeTex = (await Assets.load(bridgeUrl).catch(() => null)) as Texture | null;
     this.bridgeGfx = new Graphics();
     this.pulseGfx = new Graphics();
+    root.addChild(this.bridgeSprites);
     root.addChild(this.bridgeGfx);
     this.drawBridges();
 
