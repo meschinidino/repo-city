@@ -26,12 +26,34 @@ export interface DiffReportView {
   events?: StoredEvent[];
 }
 
+/** How a live call failed; each kind needs a different fix. */
+export type FailureKind = "unreachable" | "refused" | "server-error" | "not-json" | "bad-url";
+
+export class LiveError extends Error {
+  kind: FailureKind;
+  constructor(kind: FailureKind, message: string) {
+    super(message);
+    this.kind = kind;
+  }
+}
+
 async function jsonOrThrow(res: Response): Promise<unknown> {
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `server answered ${res.status}`);
+    if (typeof body.error === "string") throw new LiveError("refused", body.error);
+    throw new LiveError("server-error", `server answered ${res.status} without an error message`);
   }
-  return res.json();
+  return res.json().catch(() => {
+    throw new LiveError("not-json", "the answer was not JSON");
+  });
+}
+
+async function fetched(url: string): Promise<Response> {
+  try {
+    return await fetch(url);
+  } catch (e) {
+    throw new LiveError("unreachable", e instanceof Error ? e.message : String(e));
+  }
 }
 
 /**
@@ -41,14 +63,28 @@ async function jsonOrThrow(res: Response): Promise<unknown> {
  * to restart a healthy server.
  */
 export function loadFailureText(server: string, e: Error): string {
-  if (e instanceof TypeError) {
-    return `Could not reach the Repo City server at ${server} (${e.message}). Start it with: cargo run --bin repo-city-server-bin (in server/). Nothing was rendered from invented data.`;
+  const kind = e instanceof LiveError ? e.kind : e instanceof TypeError ? "unreachable" : "refused";
+  switch (kind) {
+    case "unreachable":
+      return `Could not reach the Repo City server at ${server} (${e.message}). Start it with: cargo run --bin repo-city-server-bin (in server/). Nothing was rendered from invented data.`;
+    case "bad-url":
+      return `That server address is not a valid URL: ${server}. Fix the server parameter and reload. Nothing was rendered from invented data.`;
+    case "not-json":
+      return `Something answered at ${server}, but not with Repo City JSON. The server parameter should point at the Rust server (default http://127.0.0.1:8787), not the Vite page. Nothing was rendered from invented data.`;
+    case "server-error":
+      return `The Repo City server errored: ${e.message}. Check its terminal output. Nothing was rendered from invented data.`;
+    case "refused":
+      return `The Repo City server refused to open that repo: ${e.message}. Fix the repo path and reload. Nothing was rendered from invented data.`;
   }
-  return `The Repo City server refused to open that repo: ${e.message}. Fix the repo path and reload. Nothing was rendered from invented data.`;
 }
 
 export async function fetchExtraction(server: string, repo: string): Promise<Extraction> {
-  const res = await fetch(`${server}/api/extraction?path=${encodeURIComponent(repo)}`);
+  try {
+    new URL(server);
+  } catch {
+    throw new LiveError("bad-url", `invalid server URL: ${server}`);
+  }
+  const res = await fetched(`${server}/api/extraction?path=${encodeURIComponent(repo)}`);
   return (await jsonOrThrow(res)) as Extraction;
 }
 
