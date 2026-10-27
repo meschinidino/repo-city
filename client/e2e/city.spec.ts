@@ -102,6 +102,24 @@ test("city gate journey (watcher-driven, no agent): islands, lit building, repor
   });
   expect(islands).toEqual(["@fixture/api", "@fixture/cli", "@fixture/shared", "@fixture/web"]);
 
+  // Design review fix: the camera zooms geometrically, so
+  // island labels are reachable at readable size instead of being
+  // stuck at fit-to-screen scale.
+  const scaleBefore = await page.evaluate(() => (window as unknown as { __city: { city: { cameraScale: number } } }).__city.city.cameraScale);
+  await page.mouse.move(640, 360);
+  await page.mouse.wheel(0, -600);
+  await page.waitForFunction(
+    (before) => (window as unknown as { __city: { city: { cameraScale: number } } }).__city.city.cameraScale > before * 1.3,
+    scaleBefore,
+    { timeout: 10_000 },
+  );
+  await page.mouse.dblclick(640, 360);
+  await page.waitForFunction(
+    (before) => Math.abs((window as unknown as { __city: { city: { cameraScale: number } } }).__city.city.cameraScale - before) < 0.01,
+    scaleBefore,
+    { timeout: 10_000 },
+  );
+
   // A shell-style edit: nothing names this file except the watcher.
   appendFileSync(join(repoDir, "packages/api/src/index.ts"), "\n// e2e touch\n");
   await page.waitForFunction(() => {

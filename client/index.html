@@ -3,18 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Repo City — sprite pipeline (T11)</title>
+    <title>Repo City</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Overpass:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
     <style>
       html, body { margin: 0; background: #13262b; color: #eaf2f0; font-family: "Overpass", system-ui, sans-serif; }
       #app canvas { display: block; }
-      #status { position: fixed; left: 12px; bottom: 12px; background: rgba(19,38,43,.92); padding: 8px 12px; border-radius: 10px; font-size: 13px; max-width: 90vw; }
+      #status { position: fixed; left: 12px; bottom: 12px; background: rgba(19,38,43,.92); padding: 8px 12px; border-radius: 10px; font-size: 13px; max-width: 90vw; box-shadow: 0 6px 20px rgba(8,24,28,.35); }
       #status.fail { outline: 2px solid #d4402b; }
       #controls { position: fixed; right: 12px; bottom: 12px; display: none; gap: 8px; }
-      #controls button { font: 600 13px "Overpass", system-ui, sans-serif; background: #e8812b; color: #13262b; border: 0; border-radius: 10px; padding: 8px 14px; cursor: pointer; }
-      #report { position: fixed; right: 12px; top: 12px; display: none; background: rgba(19,38,43,.94); padding: 12px 14px; border-radius: 10px; font-size: 13px; max-width: 380px; white-space: pre-wrap; }
+      #controls button { font: 600 13px "Overpass", system-ui, sans-serif; background: #e8812b; color: #1f1206; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; box-shadow: 0 6px 20px rgba(8,24,28,.35); }
+      #report { position: fixed; right: 12px; top: 12px; display: none; background: rgba(19,38,43,.94); padding: 12px 14px; border-radius: 10px; font-size: 13px; max-width: 380px; white-space: pre-wrap; box-shadow: 0 6px 20px rgba(8,24,28,.35); }
+      #controls button:hover { background: #f2934a; }
+      #controls button:focus-visible { outline: 2px solid #ffe3a3; outline-offset: 2px; }
     </style>
   </head>
   <body>

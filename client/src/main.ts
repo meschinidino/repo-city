@@ -80,8 +80,9 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   const city = new CityView(world, layout);
   const canvas = await city.init();
   document.getElementById("app")!.appendChild(canvas);
-  (canvas as HTMLCanvasElement).style.width = "100%";
-  (canvas as HTMLCanvasElement).style.height = "auto";
+  (canvas as HTMLCanvasElement).style.width = "100vw";
+  (canvas as HTMLCanvasElement).style.height = "100vh";
+  (canvas as HTMLCanvasElement).style.display = "block";
 
   let session: SessionInfo;
   try {

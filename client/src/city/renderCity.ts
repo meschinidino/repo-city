@@ -3,7 +3,7 @@ import type { World } from "../map/pipeline";
 import { PLAIN_GRASS_INDEX } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { cityProjector, PLOT, type CityLayout } from "./layoutCity";
+import { bridgeSpan, cityProjector, PLOT, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -29,6 +29,9 @@ export class CityView {
   private proj: ReturnType<typeof cityProjector>;
   private world: World;
   private texCache = new Map<string, Texture | null>();
+  private root!: Container;
+  private cam = { scale: 1, x: 0, y: 0 };
+  private fitScale = 1;
 
   constructor(world: World, layout: CityLayout) {
     this.world = world;
@@ -44,15 +47,48 @@ export class CityView {
     return this.texCache.get(key) ?? null;
   }
 
+  private toScreen(wx: number, wy: number): [number, number] {
+    return [wx * this.cam.scale + this.cam.x, wy * this.cam.scale + this.cam.y];
+  }
+
   /** Screen position of a file's plot centre (for tests and labels). */
   fileScreenPos(file: string): [number, number] | null {
     const pos = this.layout.filePos.get(file);
     if (!pos) return null;
-    return this.proj.project(pos.gx + PLOT / 2, pos.gy + PLOT / 2);
+    const [wx, wy] = this.proj.project(pos.gx + PLOT / 2, pos.gy + PLOT / 2);
+    return this.toScreen(wx, wy);
   }
 
   shipScreenPos(): [number, number] {
-    return [this.ship.position.x, this.ship.position.y];
+    return this.toScreen(this.ship.position.x, this.ship.position.y);
+  }
+
+  get cameraScale(): number {
+    return this.cam.scale;
+  }
+
+  private applyCam(): void {
+    this.root.position.set(this.cam.x, this.cam.y);
+    this.root.scale.set(this.cam.scale);
+  }
+
+  private fitCamera(): void {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    this.fitScale = Math.min(w / this.proj.width, h / this.proj.height);
+    this.cam.scale = this.fitScale;
+    this.cam.x = (w - this.proj.width * this.cam.scale) / 2;
+    this.cam.y = (h - this.proj.height * this.cam.scale) / 2;
+    this.applyCam();
+  }
+
+  /** Keep at least a corner of the world on screen while panning. */
+  private clampPan(): void {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    const keep = 120;
+    this.cam.x = Math.min(w - keep, Math.max(keep - this.proj.width * this.cam.scale, this.cam.x));
+    this.cam.y = Math.min(h - keep, Math.max(keep - this.proj.height * this.cam.scale, this.cam.y));
   }
 
   get shipVisible(): boolean {
@@ -62,9 +98,69 @@ export class CityView {
   async init(): Promise<HTMLElement> {
     const { TW } = { TW: 64 };
     const proj = this.proj;
-    await this.app.init({ width: proj.width, height: proj.height, background: 0x4f98a6, antialias: true, resolution: 1 });
+    await this.app.init({
+      width: window.innerWidth || proj.width,
+      height: window.innerHeight || proj.height,
+      background: 0x4f98a6,
+      antialias: true,
+      resolution: Math.min(2, window.devicePixelRatio || 1),
+      autoDensity: true,
+    });
     const root = new Container();
+    this.root = root;
     this.app.stage.addChild(root);
+    this.fitCamera();
+    // Camera: geometric pan/zoom toward DESIGN.md's zoom levels
+    // (semantic level switching is T12). Wheel zooms to the cursor,
+    // drag pans, double-click returns to the fitted map view.
+    const el = this.app.canvas as unknown as HTMLCanvasElement;
+    el.style.touchAction = "none";
+    let userMoved = false;
+    el.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        userMoved = true;
+        const next = Math.min(this.fitScale * 8, Math.max(this.fitScale * 0.9, this.cam.scale * Math.exp(-e.deltaY * 0.0012)));
+        const k = next / this.cam.scale;
+        this.cam.x = e.offsetX - (e.offsetX - this.cam.x) * k;
+        this.cam.y = e.offsetY - (e.offsetY - this.cam.y) * k;
+        this.cam.scale = next;
+        this.clampPan();
+        this.applyCam();
+      },
+      { passive: false },
+    );
+    let drag: { x: number; y: number; cx: number; cy: number } | null = null;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      userMoved = true;
+      drag = { x: e.clientX, y: e.clientY, cx: this.cam.x, cy: this.cam.y };
+      el.setPointerCapture(e.pointerId);
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      this.cam.x = drag.cx + (e.clientX - drag.x);
+      this.cam.y = drag.cy + (e.clientY - drag.y);
+      this.clampPan();
+      this.applyCam();
+    });
+    el.addEventListener("pointerup", () => (drag = null));
+    el.addEventListener("pointercancel", () => (drag = null));
+    el.addEventListener("dblclick", () => {
+      userMoved = false;
+      this.fitCamera();
+    });
+    window.addEventListener("resize", () => {
+      this.app.renderer.resize(window.innerWidth, window.innerHeight);
+      this.fitScale = Math.min(this.app.screen.width / this.proj.width, this.app.screen.height / this.proj.height);
+      if (!userMoved) this.fitCamera();
+      else {
+        this.cam.scale = Math.min(this.fitScale * 8, Math.max(this.fitScale * 0.9, this.cam.scale));
+        this.clampPan();
+        this.applyCam();
+      }
+    });
     const tileTex = Texture.from(pixelsToCanvas(this.world.tiles[PLAIN_GRASS_INDEX]));
     const tileH = (this.world.tiles[PLAIN_GRASS_INDEX].height * TW) / TWBASE;
 
@@ -87,18 +183,43 @@ export class CityView {
       }
     }
 
-    // bridges between island centres, width grows with import count
+    // shoreline: shallow halo and a sand edge under every island
+    // (DESIGN.md: shallow water is drawn in code under the tiles)
+    const shore = new Graphics();
+    for (const isl of this.layout.islands) {
+      const w = isl.cols * PLOT;
+      const h = isl.rows * PLOT;
+      const ring = (e: number): number[] => [
+        ...proj.project(isl.x - e, isl.y - e),
+        ...proj.project(isl.x + w + e, isl.y - e),
+        ...proj.project(isl.x + w + e, isl.y + h + e),
+        ...proj.project(isl.x - e, isl.y + h + e),
+      ];
+      shore.poly(ring(1.3));
+      shore.fill({ color: 0x8fd8cf, alpha: 0.4 });
+      shore.poly(ring(0.45));
+      shore.fill({ color: 0xe8cf92, alpha: 0.9 });
+    }
+    root.addChild(shore);
+
+    // bridges shore-to-shore (never across the land they connect),
+    // width grows with import count
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
     const bridges = new Graphics();
     for (const br of this.layout.bridges) {
       const a = byId.get(br.from);
       const b = byId.get(br.to);
       if (!a || !b) continue;
-      const [ax, ay] = proj.project(a.center.gx, a.center.gy);
-      const [bx, by] = proj.project(b.center.gx, b.center.gy);
+      const span = bridgeSpan(
+        { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT },
+        { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
+      );
+      if (!span) continue;
+      const [ax, ay] = proj.project(span[0].gx, span[0].gy);
+      const [bx, by] = proj.project(span[1].gx, span[1].gy);
       bridges.moveTo(ax, ay);
       bridges.lineTo(bx, by);
-      bridges.stroke({ color: 0xb98652, alpha: 0.8, width: Math.min(10, 2 + Math.log2(br.count + 1)) });
+      bridges.stroke({ color: 0xb98652, alpha: 0.55, width: Math.min(6, 1.5 + Math.log2(br.count + 1)) });
     }
     root.addChild(bridges);
 
@@ -189,7 +310,7 @@ export class CityView {
       this.glow.lineTo(cx, cy + TW / 2);
       this.glow.lineTo(cx - TW, cy);
       this.glow.closePath();
-      this.glow.fill({ color: 0xffd34d, alpha: 0.4 });
+      this.glow.fill({ color: 0xf6c85f, alpha: 0.45 });
     }
     // No fallback island: markers only appear where an event
     // actually pointed. Unknown stays unknown.
@@ -205,7 +326,7 @@ export class CityView {
       this.glow.lineTo(cx + TW * 0.55, cy - TW * 1.3);
       this.glow.lineTo(cx, cy - TW);
       this.glow.closePath();
-      this.glow.fill({ color: view.testPassed ? 0x3fae5a : 0xd4402b, alpha: 0.95 });
+      this.glow.fill({ color: view.testPassed ? 0x3e9a5b : 0xd4402b, alpha: 0.95 });
     }
     // ship target: the touched building, else the island gate —
     // only when an event named an island. Otherwise no target and
