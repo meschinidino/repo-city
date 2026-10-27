@@ -8,7 +8,7 @@ This is not a dashboard. It is a game-like world you operate: the map is the int
 
 ## Status
 
-Version 0.1.3. Design phase complete and approved; visual direction and sprite pipeline locked on 2026-10-26 (roadmap step 1). No application code yet.
+Version 0.2.0. Roadmap step 4 of 8. The live loop works: the Rust server extracts a repo into islands and bridges, serves them to the Pixi client, runs agent sessions in git worktrees (create, pause, resume, stop, archive, follow-up), and streams real file events to the map. Next: the command bar and quest log (T12). See [ROADMAP.md](ROADMAP.md) for step status.
 
 - Roadmap: [ROADMAP.md](ROADMAP.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Rules for coding agents: [AGENTS.md](AGENTS.md)
 - Visual design system — the archipelago, building types, colors, type, and the sprite pipeline rules: [DESIGN.md](DESIGN.md)

@@ -1,7 +1,9 @@
 # Step 4 plan — quests, command bar, zoom semantics (T12 + T5 order)
 
-Status: under /plan-design-review, 2026-10-27. Decisions land here as
-the owner approves them; unresolved ones stay marked PENDING.
+Status: review done, 2026-10-27. The owner approved the decisions
+below and picked variant A, "Harbor bar". T5 is built (PR #15).
+T12 is next. One item stays deferred: the D-zoom threshold (pinned
+in the map-visuals work from the GestiKo count distribution).
 
 ## Scope (ROADMAP step 4, specs T12/T5, DESIGN.md)
 
@@ -19,13 +21,8 @@ the owner approves them; unresolved ones stay marked PENDING.
 2. The command bar (who is working, bottom edge, always visible).
 3. The quest log / report card (only when opened).
 
-PENDING decisions: D-zoom (aggregation rule), D-create (quest
-creation flow), D-order (T12 vs T5), D-report (card actions in
-step 4), D-input (keyboard/small-screen/camera hints).
-
-## GSTACK REVIEW REPORT
-
-(to be completed at the end of the review)
+All decisions are resolved below. One value stays deferred: the
+D-zoom import-count threshold.
 
 ## Decisions
 

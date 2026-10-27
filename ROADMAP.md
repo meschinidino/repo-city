@@ -18,7 +18,7 @@ Lines marked **▸ gstack** are reminders for whoever is working (Dino, Claude C
 - Locked: a low-poly quest archipelago, Codex image generation for art, sprites placed by measured footprint plates on a grid-fitted tile set with an occupancy grid.
 - Delivered: [DESIGN.md](DESIGN.md), the sprite sheets and briefs in [assets/](assets/), concept art in [docs/design/concepts/](docs/design/concepts/), the working pipeline prototype in [prototype/sprite-spike/](prototype/sprite-spike/), and [AGENTS.md](AGENTS.md) for handoff (v0.1.2).
 - Ran: `/office-hours`, `/plan-eng-review`, `/design-consultation`.
-- Carried forward: tile edge error 1.39% (target under 1%); command bar, quest log and report card not mocked yet.
+- Carried forward: tile edge error 1.39% (target under 1%).
 
 ## 2. Setup, rule check and day-1 spikes
 
@@ -38,7 +38,7 @@ Work:
 - Record labeled-simulated CLI event fixtures once the event enum is frozen, so the client can be built in parallel (lane B in the design doc).
 - Paper-test the 3-minute story on the demo repo's owner: they must retell what the repo does in 20 seconds.
 
-## 3. Live loop on the map (day-3 kill gate)
+## 3. Live loop on the map (day-3 kill gate) — done (2026-10-27)
 
 - Axum server, SQLite store, WebSocket event stream.
 - T4: filesystem watcher plus `git status` as ground truth for file touches.
@@ -49,12 +49,12 @@ Work:
   - **▸ gstack `/qa`** on the gate journey in the browser: open a repo, start a session, watch real events, read the report.
   - **▸ gstack `/design-review`** on the rendered map at full size against DESIGN.md.
 
-## 4. Quests and the command bar (session CRUD)
+## 4. Quests and the command bar (session CRUD) — in progress: plan and mocks done, T5 done, T12 next
 
 - **▸ gstack `/plan-design-review`** first: the eng review approved a "city with districts"; review the archipelago plan's UI (command bar, quest log, report card, every empty, stalled and failed state) before building it.
 - T12: mock the command bar, quest log and report card against DESIGN.md, then build them with their empty, stalled, failed and report-unavailable states.
   - **▸ gstack `/design-shotgun`** for mock variants, then **`/design-html`** to turn the chosen one into production HTML/CSS. The gstack designer needs an OpenAI API key (`~/.claude/skills/gstack/design/dist/design setup`); without one, generate mocks with Codex image generation the way the sprites were made (`assets/briefs/`).
-- T5: worktree per session; create, pause (stop plus resume by session id), stop, archive; island locks; shared read-only dependencies.
+- T5: worktree per session; create, pause (stop plus resume by session id), stop, archive; island locks; shared read-only dependencies. Done (PR #15, 2026-10-27): pause/resume/archive/follow-up routes, worktrees under `~/.repo-city/worktrees/`, island locks, 3-quest cap. The live pause/resume test with a real Claude process is still open.
 - Quests in plain English, with the target island and model chosen at creation.
 - Draft the 3-minute demo script now, so steps 5–8 build toward it.
 

@@ -4,6 +4,11 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ## [Unreleased]
 
+### Changed — docs sync (2026-10-27)
+- Fixed dead doc claims found in a doc audit: README no longer says "no application code yet" (it says step 4 of 8, version 0.2.0); AGENTS.md lists the real test commands; ROADMAP marks step 3 done and step 4 in progress with T5 done; DESIGN.md, `specs/design.md` and `specs/test-plan.md` record the approved command-bar variant A; `specs/step4-plan.md` status matches its decisions; working notes carry a dated update for the 60-island counts. Released changelog entries were not touched.
+- Note for the canonical copies: `specs/design.md` and `specs/test-plan.md` were edited in the repo. Their canonical copies in `~/.gstack/projects/meta-hackathon/` need the same edits.
+
+
 ### Added — T5 session lifecycle (step 4, server first)
 - New routes: `POST /api/sessions/{id}/pause`, `/resume`, `/archive`, and `/follow-up`. Bad moves fail with 409 (for example resume on a stopped session); unknown sessions give 404.
 - A spawned session now works in a git worktree under the user home (`.repo-city/worktrees/<id>`) on branch `repo-city/<id8>`. The agent does not edit the user checkout, and the worktree does not pollute the user git status. Worktree create and remove have tests on a real git repo. A non-git repo gives an honest error.
@@ -13,7 +18,7 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 - Tests: cargo 39 pass (was 31), clippy clean. The lifecycle tests use real HTTP with `spawn=false`. They do not test a real Claude process. That part is not yet proven live.
 
 
-Roadmap step 3, server half of the live loop (day-3 kill gate). Not yet a release: the client still renders the three-island test map, not islands from an extraction (T7 first slice is next).
+Roadmap steps 3 and 4 (in progress). Not yet a release.
 
 ### Added — server (T3/T4 + server core)
 - Normalized event enum frozen (design D4) in `server/src/events/`: session started, file touched (path, change kind), command run, test result, agent message, session finished (completed/failed/stopped), each tagged with its source (cli, watcher, system). Stored events carry a global id and a gapless per-session `seq`. Free-text fields are redacted before storage (env-value matching plus token shapes, `events/redact.rs`); a cargo test asserts a planted secret never reaches SQLite.

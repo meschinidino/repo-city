@@ -48,5 +48,5 @@ Repo: local-only
 - none
 
 ## Pending Decisions
-- Command bar, quest log and report card visuals (specified in DESIGN.md, not mocked yet)
+- Command bar, quest log and report card visuals (specified in DESIGN.md, mocked 2026-10-27, variant A "Harbor bar" approved; build is T12)
 - Muse's role beyond art
