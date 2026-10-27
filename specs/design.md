@@ -720,7 +720,7 @@ Conflict flags: event enum (server/client shared contract) is sequenced first an
 ## Implementation Tasks
 Synthesized from this review's findings. Each task derives from a specific finding above. Run with Claude Code or Codex; checkbox as you ship.
 
-- [ ] **T1 (P1, human: ~1d / CC: ~1h)** — Meta tooling — Run the Meta AI tooling rule check and record the Llama access path (API/local) before adapter code
+- [x] **T1 (P1, human: ~1d / CC: ~1h)** — Meta tooling — Run the Meta AI tooling rule check and record the Llama access path (API/local) before adapter code
   - Surfaced by: Outside Voice C1 / R5 (D7)
   - Files: docs/meta-tooling-rule.md (new repo)
   - Verify: rule text quoted; if ambiguous, Discord office-hours answer attached

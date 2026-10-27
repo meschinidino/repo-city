@@ -10,7 +10,7 @@ Repo City manages AI coding-agent sessions for one TypeScript/JavaScript repo, r
 
 1. [notes/working-notes.md](notes/working-notes.md): where the plan lives, binding decisions, gates, honesty rules.
 2. [ROADMAP.md](ROADMAP.md): steps in order; step 1 is done. Lines marked **▸ gstack** name the gstack skill to run at that point (for example `/review` before every merge, `/qa` at each journey, `/plan-design-review` before the command bar). Run them when you reach that point, and say in your report which ones you ran.
-3. [specs/design.md](specs/design.md): the approved design, committed contracts, decision ledger D1–D23, tasks T1–T12. Its decisions are binding; don't re-open them without the user.
+3. [specs/design.md](specs/design.md): the approved design, committed contracts, decision ledger D1–D23, tasks T1–T13. Its decisions are binding; don't re-open them without the user.
 4. [DESIGN.md](DESIGN.md) before any visual or UI work: world model, building types, tokens, layout, motion, and the sprite pipeline rules and checks.
 5. [specs/test-plan.md](specs/test-plan.md) before writing tests.
 
@@ -18,7 +18,7 @@ Repo City manages AI coding-agent sessions for one TypeScript/JavaScript repo, r
 
 Roadmap step 2. Gate order matters:
 
-1. **T1 — Meta AI tooling rule check comes before any adapter code.** It needs the user (accepting the Official Rules in the portal, Discord #office-hours for ambiguity). Don't write adapter code (T3) or the permission bridge (T8) until T1's answer is recorded in `docs/meta-tooling-rule.md`.
+1. **T1 — Meta AI tooling rule check: done (2026-10-26).** Official Rules accepted in the portal; Discord #office-hours asked. Adapter code (T3) and the permission bridge (T8) are unblocked.
 2. **Can start without T1:**
    - T2: Oxc extraction spike (directory-first islands, import bridges, parsed/resolved/unresolved counts). Done against a stand-in TS/JS fixture.
    - T13: single-package districts (feature/module directories) and Python extraction, tested on GestiKo (the available real repo: one TS frontend package plus a Python backend in a single repo). Added by the 2026-10-26 amendment in `specs/design.md`. Go extraction only at the end of the hackathon if time remains; not committed scope. Multi-repo stays out of scope.
