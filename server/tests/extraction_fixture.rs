@@ -241,6 +241,34 @@ fn stand_in_single_package_python_and_feature_islands() {
 }
 
 #[test]
+fn workspace_repo_keeps_files_outside_packages() {
+    let dir = std::env::temp_dir().join(format!("repo-city-ws-stray-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("packages/a/src")).expect("mkdir pkg");
+    std::fs::create_dir_all(dir.join("tools")).expect("mkdir tools");
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"name":"ws","private":true,"workspaces":["packages/*"]}"#,
+    )
+    .expect("write root pkg");
+    std::fs::write(
+        dir.join("packages/a/package.json"),
+        r#"{"name":"@x/a","main":"src/index.ts"}"#,
+    )
+    .expect("write pkg");
+    std::fs::write(dir.join("packages/a/src/index.ts"), "export const a = 1;\n")
+        .expect("write index");
+    std::fs::write(dir.join("tools/script.ts"), "export const s = 1;\n").expect("write stray");
+    let extraction = extract_repo(&dir).expect("extract workspace with stray file");
+    assert_eq!(
+        extraction.counts.files_parsed, 2,
+        "stray file must not be dropped"
+    );
+    assert!(extraction.files.iter().any(|f| f.path == "tools/script.ts"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn empty_repo_yields_zero_counts_not_a_panic() {
     let dir = std::env::temp_dir().join(format!("repo-city-empty-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");

@@ -303,6 +303,52 @@ fn discover_islands(root: &Path, files: &[PathBuf]) -> Vec<IslandDef> {
         }
     }
     if !islands.is_empty() {
+        // Files outside every workspace package still need an island:
+        // dropping them would silently undercount the repo. Give each
+        // uncovered top-level directory (and loose root files) a fallback
+        // island; longest-prefix matching keeps package files in packages.
+        let mut uncovered: BTreeMap<String, PathBuf> = BTreeMap::new();
+        let mut root_files = false;
+        for file in files {
+            if islands.iter().any(|i| file.starts_with(&i.abs_path)) {
+                continue;
+            }
+            let Ok(rel) = file.strip_prefix(root) else {
+                continue;
+            };
+            let mut comps = rel.components();
+            match (comps.next(), comps.next()) {
+                (Some(first), Some(_)) => {
+                    let name = first.as_os_str().to_string_lossy().into_owned();
+                    uncovered
+                        .entry(name)
+                        .or_insert_with(|| root.join(first.as_os_str()));
+                }
+                (Some(_), None) => root_files = true,
+                _ => {}
+            }
+        }
+        for (name, dir) in uncovered {
+            if islands.iter().any(|i| i.abs_path == dir) {
+                continue;
+            }
+            islands.push(IslandDef {
+                id: name.clone(),
+                name,
+                rel_path: rel_posix(root, &dir),
+                abs_path: dir,
+                entry_files: HashSet::new(),
+            });
+        }
+        if root_files {
+            islands.push(IslandDef {
+                id: "root".to_string(),
+                name: "root".to_string(),
+                rel_path: ".".to_string(),
+                abs_path: root.to_path_buf(),
+                entry_files: HashSet::new(),
+            });
+        }
         return islands;
     }
     // Single-package districts: a `features/<name>` or `modules/<name>`
@@ -426,7 +472,11 @@ fn parse_python_imports(source: &str) -> (Vec<String>, Option<String>) {
 }
 
 fn parse_imports(path: &Path, source: &str) -> (Vec<String>, Option<String>) {
-    if path.extension().and_then(|e| e.to_str()) == Some("py") {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("py"))
+    {
         return parse_python_imports(source);
     }
     let source_type = SourceType::from_path(path).unwrap_or_default();
@@ -649,8 +699,14 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
         let Some(island_idx) = island_index_for(&islands_def, abs) else {
             continue;
         };
-        let source = std::fs::read_to_string(abs).unwrap_or_default();
-        let (specifiers, parse_error) = parse_imports(abs, &source);
+        let (source, read_error) = match std::fs::read_to_string(abs) {
+            Ok(text) => (text, None),
+            Err(err) => (String::new(), Some(format!("read error: {err}"))),
+        };
+        let (specifiers, mut parse_error) = parse_imports(abs, &source);
+        if read_error.is_some() {
+            parse_error = read_error;
+        }
         raw_files.push(RawFile {
             abs_path: abs.clone(),
             rel_path: rel_posix(&root, abs),
@@ -700,7 +756,12 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
         import_counts[idx] = file.specifiers.len();
         total_imports += file.specifiers.len();
         for specifier in &file.specifiers {
-            if file.abs_path.extension().and_then(|e| e.to_str()) == Some("py") {
+            if file
+                .abs_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("py"))
+            {
                 match resolve_python_target(&file.abs_path, specifier, &by_canon) {
                     Some(target_idx) => {
                         resolved_imports += 1;
