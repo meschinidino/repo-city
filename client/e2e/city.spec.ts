@@ -31,15 +31,19 @@ test.beforeAll(async () => {
   const serverDir = resolve(process.cwd(), "../server");
   const bin = join(serverDir, "target/debug/repo-city-server-bin");
   // Never test against a stale binary: rebuild when any server
-  // source (recursive walk) is newer than it.
-  const newestSource = (function walk(dir: string): number {
-    let newest = 0;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name);
-      newest = Math.max(newest, entry.isDirectory() ? walk(p) : statSync(p).mtimeMs);
-    }
-    return newest;
-  })(join(serverDir, "src"));
+  // source (recursive walk) or manifest is newer than it.
+  const newestSource = Math.max(
+    (function walk(dir: string): number {
+      let newest = 0;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        newest = Math.max(newest, entry.isDirectory() ? walk(p) : statSync(p).mtimeMs);
+      }
+      return newest;
+    })(join(serverDir, "src")),
+    statSync(join(serverDir, "Cargo.toml")).mtimeMs,
+    statSync(join(serverDir, "Cargo.lock")).mtimeMs,
+  );
   if (!existsSync(bin) || statSync(bin).mtimeMs < newestSource) {
     execSync("cargo build --bin repo-city-server-bin", {
       cwd: serverDir,
@@ -58,18 +62,22 @@ test.beforeAll(async () => {
   for (let attempt = 0; attempt < 5 && !SERVER; attempt++) {
     const port = 8800 + Math.floor(Math.random() * 400);
     const candidate = `http://127.0.0.1:${port}`;
+    // Skip ports something already answers on: that responder is
+    // foreign by definition, and racing its /health against our
+    // process's bind failure would accept the wrong server.
+    const occupied = await fetch(`${candidate}/health`).then((r) => r.ok).catch(() => false);
+    if (occupied) continue;
     serverProc = spawn(bin, ["--port", String(port), "--db", join(workRoot, "e2e.db")], { stdio: "ignore" });
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 25 && !SERVER; i++) {
       try {
         const res = await fetch(`${candidate}/health`);
-        // Only accept the port when OUR process is the one alive
-        // behind it (a foreign server answering /health is not us).
         if (res.ok && serverProc.exitCode === null) {
-          SERVER = candidate;
-          break;
+          // Let a bind failure surface before trusting the answer.
+          await new Promise((r) => setTimeout(r, 300));
+          if (serverProc.exitCode === null) SERVER = candidate;
         }
       } catch { /* not up yet */ }
-      await new Promise((r) => setTimeout(r, 200));
+      if (!SERVER) await new Promise((r) => setTimeout(r, 200));
     }
     if (!SERVER) serverProc.kill();
   }
