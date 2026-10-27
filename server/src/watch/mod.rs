@@ -41,7 +41,7 @@ pub fn git_status_changes(root: &Path) -> Result<Vec<FileChange>, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain=v1", "-z"])
+        .args(["status", "--porcelain=v1", "-z", "-uall"])
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {

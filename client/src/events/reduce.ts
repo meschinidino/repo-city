@@ -75,19 +75,22 @@ export function applyEvent(
         break;
       }
       const island = fileToIsland.get(event.path);
+      if (event.change === "deleted") {
+        // A deleted building unlights and undocks; it is never lit.
+        next.litFiles = next.litFiles.filter((f) => f !== event.path);
+        if (next.shipFile === event.path) next.shipFile = null;
+        break;
+      }
       if (island) {
         next.shipIsland = island;
         next.shipFile = event.path;
         next.locationUnknown = false;
+        if (!next.litFiles.includes(event.path)) next.litFiles.push(event.path);
       } else {
-        // Stay at the gate of the island we are on; invent nothing.
+        // Stay at the gate of the island we are on; invent nothing,
+        // and do not light a path with no building behind it.
         next.shipFile = null;
         next.locationUnknown = true;
-      }
-      if (event.change === "deleted") {
-        next.litFiles = next.litFiles.filter((f) => f !== event.path);
-      } else if (!next.litFiles.includes(event.path)) {
-        next.litFiles.push(event.path);
       }
       break;
     }

@@ -17,6 +17,7 @@ export interface OverlapMeasure {
 }
 
 const STEP = 4; // sample every 4th pixel; tiles are TWBASE wide
+const TRIPLE_STEP = 8; // coarser grid for the 12^3 arrangement sweep
 
 function topFaceCovers(tile: PixelData, lx: number, ly: number): boolean {
   if (lx < 0 || ly < 0 || lx >= tile.width || ly >= tile.height) return false;
@@ -26,7 +27,7 @@ function topFaceCovers(tile: PixelData, lx: number, ly: number): boolean {
 }
 
 /** Overlap of `tile` with `east` and `south` neighbours placed on the grid. */
-export function measureTileOverlap(tile: PixelData, east: PixelData, south: PixelData): OverlapMeasure {
+export function measureTileOverlap(tile: PixelData, east: PixelData, south: PixelData, step: number = STEP): OverlapMeasure {
   const placed: { img: PixelData; ox: number; oy: number }[] = [
     { img: tile, ox: 0, oy: 0 },
     { img: east, ox: TWBASE / 2, oy: TWBASE / 4 },
@@ -34,8 +35,8 @@ export function measureTileOverlap(tile: PixelData, east: PixelData, south: Pixe
   ];
   let overlapPx = 0;
   let topPx = 0;
-  for (let y = 0; y < TWBASE; y += STEP) {
-    for (let x = -TWBASE / 2; x < TWBASE * 1.5; x += STEP) {
+  for (let y = 0; y < TWBASE; y += step) {
+    for (let x = -TWBASE / 2; x < TWBASE * 1.5; x += step) {
       let covers = 0;
       for (const p of placed) {
         if (topFaceCovers(p.img, x - p.ox, y - p.oy)) covers++;
@@ -47,20 +48,23 @@ export function measureTileOverlap(tile: PixelData, east: PixelData, south: Pixe
   return { overlapPx, topPx, overlapPct: topPx ? (overlapPx / topPx) * 100 : 0 };
 }
 
-/** Worst arrangement: every fitted tile against every neighbour in
- * both the east and the south slot, mixed with itself. */
+/** Worst arrangement over every (tile, east, south) triple. The
+ * sweep screens on the coarse triple grid (which inflates thin edge
+ * slivers), then re-measures the winning triple on the fine grid so
+ * the reported number is the accurate one. */
 export function worstTileOverlap(tiles: PixelData[]): OverlapMeasure & { tile: number; east: number; south: number } {
-  let worst: (OverlapMeasure & { tile: number; east: number; south: number }) | null = null;
-  const consider = (m: OverlapMeasure, tile: number, east: number, south: number) => {
-    // Seed from the first real measurement so a zero-overlap world
-    // still reports the pixels that were actually sampled.
-    if (!worst || m.overlapPct > worst.overlapPct) worst = { ...m, tile, east, south };
-  };
+  let candidate: { tile: number; east: number; south: number; pct: number } | null = null;
   for (let i = 0; i < tiles.length; i++) {
     for (let e = 0; e < tiles.length; e++) {
-      consider(measureTileOverlap(tiles[i], tiles[e], tiles[i]), i, e, i);
-      consider(measureTileOverlap(tiles[i], tiles[i], tiles[e]), i, i, e);
+      for (let s = 0; s < tiles.length; s++) {
+        const m = measureTileOverlap(tiles[i], tiles[e], tiles[s], TRIPLE_STEP);
+        if (!candidate || m.overlapPct > candidate.pct) {
+          candidate = { tile: i, east: e, south: s, pct: m.overlapPct };
+        }
+      }
     }
   }
-  return worst ?? { overlapPx: 0, topPx: 0, overlapPct: 0, tile: -1, east: -1, south: -1 };
+  if (!candidate) return { overlapPx: 0, topPx: 0, overlapPct: 0, tile: -1, east: -1, south: -1 };
+  const fine = measureTileOverlap(tiles[candidate.tile], tiles[candidate.east], tiles[candidate.south], 2);
+  return { ...fine, tile: candidate.tile, east: candidate.east, south: candidate.south };
 }

@@ -59,6 +59,7 @@ describe("event reduction (simulated events)", () => {
     expect(v.shipIsland).toBe("api");
     expect(v.shipFile).toBeNull();
     expect(v.locationUnknown).toBe(true);
+    expect(v.litFiles).toEqual([]);
   });
 
   it("replay duplicates at or below lastSeq change nothing", () => {

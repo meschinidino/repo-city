@@ -73,7 +73,7 @@ describe("prototype checks table — committed sheets in assets/sprites/", () =>
     // regression bound at the measured value's order (edge growth in
     // the fit leaves a sliver at shared edges), printed every run.
     const worst = worstTileOverlap(world.tiles);
-    console.log(`[t11] worst tile overlap ${worst.overlapPx}/${worst.topPx} px (${worst.overlapPct.toFixed(3)}%) tile=${worst.tile} east=${worst.east}`);
+    console.log(`[t11] worst tile overlap ${worst.overlapPx}/${worst.topPx} px (${worst.overlapPct.toFixed(3)}%) tile=${worst.tile} east=${worst.east} south=${worst.south}`);
     expect(world.tiles).toHaveLength(12);
     for (const t of world.tiles) expect(t.width).toBe(1000);
     expect(worst.topPx).toBeGreaterThan(0);

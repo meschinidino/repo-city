@@ -26,6 +26,9 @@ pub struct AppState {
     pub tx: broadcast::Sender<StoredEvent>,
     watchers: Mutex<HashMap<String, RepoWatcher>>,
     children: Mutex<HashMap<String, tokio::process::Child>>,
+    /// Sessions whose agent spawn is in flight but whose child is
+    /// not registered yet; /stop waits briefly for these.
+    spawning: Mutex<std::collections::HashSet<String>>,
     /// Serializes append+broadcast so the channel can never deliver
     /// events out of global-id order (a live client drops any event
     /// whose id is below the last one it saw).
@@ -80,7 +83,15 @@ impl AppState {
             let sid = session_id.to_string();
             let root = root.to_path_buf();
             tokio::spawn(async move {
+                // Seed with the pre-existing dirty state: files that
+                // were already uncommitted when the session started
+                // are not touches by this session and never emit.
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                if let Ok(initial) = crate::watch::git_status_changes(&root) {
+                    for c in &initial {
+                        seen.insert(format!("{}:{:?}", c.path, c.change));
+                    }
+                }
                 let mut tick = tokio::time::interval(Duration::from_secs(5));
                 loop {
                     tick.tick().await;
@@ -100,6 +111,24 @@ impl AppState {
                     };
                     let mut current = std::collections::HashSet::new();
                     for c in changes {
+                        // Directories are not buildings, and a path
+                        // the notify stream just reported is not a
+                        // second touch: the backstop only fills gaps.
+                        if c.change != crate::events::ChangeKind::Deleted
+                            && root.join(&c.path).is_dir()
+                        {
+                            continue;
+                        }
+                        let recent = store.events_for(&sid, 0).unwrap_or_default();
+                        let just_seen = recent.iter().rev().take(50).any(|e| {
+                            matches!(&e.payload, EventPayload::FileTouched { path, .. } if path == &c.path)
+                                && crate::events::now_ms() - e.ts_ms < 10_000
+                        });
+                        if just_seen {
+                            seen.insert(format!("{}:{:?}", c.path, c.change));
+                            current.insert(format!("{}:{:?}", c.path, c.change));
+                            continue;
+                        }
                         let key = format!("{}:{:?}", c.path, c.change);
                         current.insert(key.clone());
                         if seen.insert(key) {
@@ -134,6 +163,7 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         tx,
         watchers: Mutex::new(HashMap::new()),
         children: Mutex::new(HashMap::new()),
+        spawning: Mutex::new(std::collections::HashSet::new()),
         emit_lock: Arc::new(Mutex::new(())),
         debounce,
     });
@@ -236,6 +266,9 @@ async fn create_session(
 /// is the spike default (`acceptEdits` inside the session repo);
 /// T8 owns the permission bridge and may tighten this.
 fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: String) {
+    // Marked synchronously so a /stop racing the spawn can wait for
+    // the child to register instead of missing it entirely.
+    state.spawning.lock().unwrap().insert(session_id.clone());
     tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut child = match tokio::process::Command::new("claude")
@@ -264,6 +297,7 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
                     },
                 );
                 let _ = state.store.set_state(&session_id, "failed");
+                state.spawning.lock().unwrap().remove(&session_id);
                 return;
             }
         };
@@ -277,12 +311,24 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
             .lock()
             .unwrap()
             .insert(session_id.clone(), child);
+        state.spawning.lock().unwrap().remove(&session_id);
         // The CLI reports canonical paths (e.g. /private/tmp on
         // macOS); strip the canonical session root, not the raw one.
         let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
         let mut lines = BufReader::new(stdout).lines();
         let mut finish_state: Option<&'static str> = None;
         while let Ok(Some(line)) = lines.next_line().await {
+            // A stopped session logs nothing more: buffered CLI
+            // output after /stop must not resurrect it as finished.
+            if state
+                .store
+                .get_session(&session_id)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.state == "stopped")
+            {
+                break;
+            }
             let t = crate::adapters::claude::translate_line(&line);
             if let Some(cli_id) = &t.cli_session_id {
                 let _ = state.store.set_cli_session_id(&session_id, cli_id);
@@ -451,6 +497,16 @@ async fn stop_session(
     let watcher = state.watchers.lock().unwrap().remove(&id);
     if let Some(watcher) = watcher {
         watcher.stop();
+    }
+    // If the agent spawn is still in flight, wait briefly for the
+    // child to register so it can be killed rather than orphaned.
+    for _ in 0..50 {
+        if state.children.lock().unwrap().contains_key(&id)
+            || !state.spawning.lock().unwrap().contains(&id)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let mut child = state.children.lock().unwrap().remove(&id);
     if let Some(child) = child.as_mut() {

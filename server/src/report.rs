@@ -96,6 +96,12 @@ pub fn diff_report(root: &Path) -> DiffReport {
                         new_file: true,
                     });
                 }
+            } else if let Some(path) = line.strip_prefix("A  ") {
+                // Staged-new: already in the numstat list with real
+                // counts; just mark it as new.
+                if let Some(f) = files.iter_mut().find(|f| f.path == path) {
+                    f.new_file = true;
+                }
             }
         }
     }
