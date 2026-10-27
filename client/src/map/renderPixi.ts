@@ -174,7 +174,7 @@ export async function renderWorld(world: World, TW = 200): Promise<Application> 
   // island labels on the water
   for (const isl of ISLANDS) {
     const [lx, ly] = proj.project(isl.label[0], isl.label[1]);
-    const t = new Text({ text: isl.name, style: { fontFamily: "system-ui, sans-serif", fontWeight: "800", fontSize: Math.round(TW * 0.3), fill: 0xffffff, stroke: { color: 0x14323c, width: Math.max(3, TW / 25), alpha: 0.55 } } });
+    const t = new Text({ text: isl.name, style: { fontFamily: "\"Bricolage Grotesque\", sans-serif", fontWeight: "800", fontSize: Math.round(TW * 0.3), fill: 0xffffff, stroke: { color: 0x14323c, width: Math.max(3, TW / 25), alpha: 0.55 } } });
     t.anchor.set(0.5, 0);
     t.position.set(lx, ly);
     root.addChild(t);
