@@ -416,7 +416,16 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
             Some(c) => c.wait().await.map_err(|e| e.to_string()),
             None => Err("child already reaped".to_string()),
         };
-        if stopped_externally {
+        // Rechecked after the wait: a /stop that landed while the
+        // child was exiting already emitted its stopped event and
+        // owns the final state; a second finish must not follow it.
+        let stopped_during_wait = state
+            .store
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.state == "stopped");
+        if stopped_externally || stopped_during_wait {
             return;
         }
         if finish_state.is_none() {
