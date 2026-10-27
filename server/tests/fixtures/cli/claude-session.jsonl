@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","session_id":"sim-session-0001","model":"simulated"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I'll fix the greeting."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/repo/src/greet.ts","old_string":"hi","new_string":"hello"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm test"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/repo/src/greet.ts"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"sim-1","content":"ok"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sim-session-0001"}

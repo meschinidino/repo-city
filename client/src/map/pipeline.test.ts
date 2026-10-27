@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { buildWorld, usedSprites, type World } from "./pipeline";
+import { buildWorld, renderGateFailures, usedSprites, type World } from "./pipeline";
 import { loadAllSheets } from "./loadSheetsNode";
 import { occlusion } from "./placement";
 import { coastMask, nearestCoastIndex, COAST_MASK } from "./coast";
 import { COLS, ROWS, land, BRIDGES, LANE } from "./world";
 import { bridgeDeck, isShoreEdgeMidpoint } from "./drawGeometry";
+import { worstTileOverlap } from "./tileOverlap";
 import { PASS } from "./checks";
 
 let world: World;
@@ -64,15 +65,19 @@ describe("prototype checks table — committed sheets in assets/sprites/", () =>
     expect(world.medianThick).toBeGreaterThan(0);
   });
 
-  it("tile overlap after fitting: 0 by construction (grid diamonds share edges)", () => {
-    // Exact diamonds on the iso grid tile the plane: neighbours share an edge, area overlap is zero.
-    const diamondArea = (tw: number) => (tw * (tw / 2)) / 2;
-    // two horizontally neighbouring diamonds intersect only along the shared edge
-    const overlap = 0; // shared-edge intersection has zero area
-    expect(diamondArea(200)).toBeGreaterThan(0);
-    expect(overlap).toBe(0);
+  it("tile overlap after fitting: measured on the composited grid, worst under 0.5% of top-face pixels", () => {
+    // Replaces a tautological version that asserted a literal 0
+    // constant. This composites the actual fitted tile pixels on the
+    // renderer's grid offsets and counts pixels two top faces cover.
+    // DESIGN.md sets no numeric level for this check; 0.5% is a
+    // regression bound at the measured value's order (edge growth in
+    // the fit leaves a sliver at shared edges), printed every run.
+    const worst = worstTileOverlap(world.tiles);
+    console.log(`[t11] worst tile overlap ${worst.overlapPx}/${worst.topPx} px (${worst.overlapPct.toFixed(3)}%) tile=${worst.tile} east=${worst.east} south=${worst.south}`);
     expect(world.tiles).toHaveLength(12);
     for (const t of world.tiles) expect(t.width).toBe(1000);
+    expect(worst.topPx).toBeGreaterThan(0);
+    expect(worst.overlapPct).toBeLessThan(0.5);
   });
 
   it("tile edge error after fitting: worst under 1% of tile width (DESIGN target)", () => {
@@ -99,6 +104,13 @@ describe("prototype checks table — committed sheets in assets/sprites/", () =>
   });
 
   it("buildings that found no place: 0", () => { expect(world.layout.failed).toBe(0); });
+
+  it("render gate passes the committed world and trips on a layout failure", () => {
+    expect(renderGateFailures(world)).toEqual([]);
+    const broken: World = { ...world, layout: { ...world.layout, failed: 1 } };
+    const failures = renderGateFailures(broken);
+    expect(failures.some((f) => f.includes("found no place"))).toBe(true);
+  });
 
   it("trees placed (info): at least one tree on more than one type", () => {
     console.log(`[t11] trees=${world.layout.trees.length} types=${new Set(world.layout.trees.map((t) => t.bi)).size}`);

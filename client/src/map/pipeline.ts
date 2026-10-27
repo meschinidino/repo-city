@@ -5,6 +5,7 @@ import { tileFit, fitTile, type TileFit } from "./tileFit";
 import { layout, type LayoutResult } from "./layout";
 import { BFOOT, BKEYS, BNAMES, EXPECTED, XFOOT, XKEYS, XNAMES } from "./sheets";
 import { COAST_NAMES } from "./coast";
+import { PASS } from "./checks";
 import type { PixelData } from "./pixels";
 import type { Footprint } from "./plate";
 
@@ -65,6 +66,30 @@ export function buildWorld(sheets: SheetPixels): World {
     rawTiles, fits, medianThick, tiles,
     layout: layout(sprites),
   };
+}
+
+/**
+ * Fail-level geometry checks from DESIGN.md, as the render gate: a
+ * non-empty result means the client must not render and must name
+ * the failing checks. Kept beside the pipeline so tests exercise the
+ * exact list the page enforces.
+ */
+export function renderGateFailures(world: World): string[] {
+  const failures: string[] = [];
+  const used = usedSprites(world);
+  const count = world.buildings.count + world.coast.count + world.shipComp.count + world.marketTrees.count;
+  if (count !== 36) failures.push(`sprites found (${count}/36)`);
+  if (world.buildings.touching + world.coast.touching + world.shipComp.touching + world.marketTrees.touching !== 0) failures.push("sprites cropped at sheet edge");
+  if (Math.max(...used.map((s) => s.aspectErrorPct ?? Infinity)) >= PASS.plateShapePct) failures.push("plate shape vs footprint");
+  if (Math.max(...used.map((s) => s.overhangPct ?? Infinity)) >= PASS.baseOutsidePct) failures.push("base outside footprint");
+  const edge = Math.max(...world.tiles.map((t) => t.err));
+  if (edge >= PASS.tileEdgePct) failures.push(`tile edge error ${edge.toFixed(2)}%`);
+  if (Math.max(...world.tiles.map((t) => t.gap)) >= PASS.tileGapPct) failures.push("gaps inside tile top face");
+  if (world.layout.overlaps || world.layout.offLand || world.layout.onRoad) failures.push("footprint overlap/off-land/bridge landing");
+  if (world.layout.failed !== 0) failures.push(`buildings that found no place (${world.layout.failed})`);
+  if (world.layout.crowd !== 0) failures.push("building without one free cell");
+  if (world.layout.treeOnFoot || world.layout.treeFront) failures.push("tree placement");
+  return failures;
 }
 
 export function usedSprites(world: World): BuiltSprite[] {

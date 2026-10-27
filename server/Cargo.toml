@@ -2,7 +2,7 @@
 name = "repo-city-server"
 version = "0.2.0"
 edition = "2021"
-description = "Repo City server. T2 spike: Oxc-based TS/JS extraction (directory islands, import bridges, counts). Axum comes later."
+description = "Repo City server: Oxc/RustPython extraction, normalized events, SQLite store, watcher, Axum + WebSocket live loop."
 license = "MIT"
 
 [lib]
@@ -13,7 +13,17 @@ path = "src/lib.rs"
 name = "repo-city-extract"
 path = "src/bin/repo-city-extract.rs"
 
+[[bin]]
+name = "repo-city-server-bin"
+path = "src/bin/repo-city-server.rs"
+
 [dependencies]
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+notify = "8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
 oxc_allocator = "0.155"
 oxc_ast = "0.155"
 oxc_parser = "0.155"
@@ -25,3 +35,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
 [dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+tempfile = "3"
+tokio-tungstenite = "0.26"
