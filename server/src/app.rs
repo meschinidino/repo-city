@@ -345,34 +345,33 @@ async fn create_session(
     }
     // Island lock and the 3-quest cap are checked in the same
     // store lock as the insert (create_session_guarded).
+    // Worktrees live under the user home, outside every checkout:
+    // not in the repo (it would pollute the user git status) and
+    // not in temp (the system can clean temp under a paused quest).
+    let wt_root = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join(".repo-city").join("worktrees"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("repo-city-worktrees"));
     let session = match state.store.create_session_guarded(
         &body.repo_path,
         body.island_id.as_deref(),
         body.task.as_deref(),
-        body.spawn,
+        body.spawn.then(|| wt_root.to_string_lossy().into_owned()).as_deref(),
     ) {
         Ok(s) => s,
         Err(e @ crate::store::CreateError::IslandLocked { .. })
-        | Err(e @ crate::store::CreateError::CapReached) => {
+        | Err(e @ crate::store::CreateError::CapReached(_)) => {
             return err(StatusCode::CONFLICT, e.to_string()).into_response()
         }
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
     // A spawned agent works in its own git worktree (T5), never in
-    // the user's checkout. The worktree lives outside the checkout
-    // (system temp), so it does not pollute the user's git status
-    // or a watcher-only session on the same repo. Shared
-    // dependencies stay read-only by construction: the worktree
-    // holds tracked files only, and no install step runs in the
-    // user's tree.
+    // the user's checkout. Shared dependencies stay read-only by
+    // construction: the worktree holds tracked files only, and no
+    // install step runs in the user's tree.
     let mut run_root = root.clone();
     if body.spawn {
-        let wt_root = std::env::temp_dir().join("repo-city-worktrees");
         match crate::worktree::create_worktree(&root, &wt_root, &session.id) {
             Ok(path) => {
-                let _ = state
-                    .store
-                    .set_worktree_path(&session.id, &path.to_string_lossy());
                 run_root = path;
             }
             Err(e) => {
@@ -699,32 +698,12 @@ async fn stop_session(
     }
 }
 
-/// At most 3 running spawned quests (D-cap). Resume and
-/// follow-up re-enter `working`, so they check the cap too.
-fn cap_reached(state: &AppState, exclude_id: &str) -> Option<String> {
-    let all = state.store.list_sessions().ok()?;
-    let running: Vec<&crate::store::Session> = all
-        .iter()
-        .filter(|s| {
-            s.state == "working" && s.worktree_path.is_some() && s.id != exclude_id
-        })
-        .collect();
-    if running.len() >= 3 {
-        let names = running
-            .iter()
-            .map(|s| s.task.as_deref().unwrap_or(&s.id))
-            .collect::<Vec<_>>()
-            .join(", ");
-        Some(format!("3 quests are running ({names}); stop one first"))
-    } else {
-        None
-    }
-}
-
 fn transition_err(e: TransitionError) -> (StatusCode, Json<serde_json::Value>) {
     let status = match e {
         TransitionError::NotFound => StatusCode::NOT_FOUND,
-        TransitionError::BadMove { .. } => StatusCode::CONFLICT,
+        TransitionError::BadMove { .. } | TransitionError::CapReached(_) => {
+            StatusCode::CONFLICT
+        }
         TransitionError::Other(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     err(status, e.to_string())
@@ -777,9 +756,6 @@ async fn resume_session(
                 return err(StatusCode::CONFLICT, format!("island {island_id} is held by session {}", holder.id)).into_response();
             }
         }
-    }
-    if let Some(msg) = cap_reached(&state, &id) {
-        return err(StatusCode::CONFLICT, msg).into_response();
     }
     let session = match state.store.transition_state(&id, &["paused"], "working") {
         Ok(s) => s,
@@ -861,9 +837,6 @@ async fn follow_up_session(
         if let Ok(Some(holder)) = state.store.island_lock_holder(&before.repo_path, island_id, Some(&id)) {
             return err(StatusCode::CONFLICT, format!("island {island_id} is held by session {}", holder.id)).into_response();
         }
-    }
-    if let Some(msg) = cap_reached(&state, &id) {
-        return err(StatusCode::CONFLICT, msg).into_response();
     }
     let session = match state
         .store

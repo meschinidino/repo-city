@@ -37,6 +37,8 @@ pub struct Store {
 pub enum TransitionError {
     NotFound,
     BadMove { from: String, to: String },
+    /// The 3-quest cap is full; the string names the running quests.
+    CapReached(String),
     Other(String),
 }
 
@@ -44,7 +46,8 @@ pub enum TransitionError {
 #[derive(Debug, PartialEq)]
 pub enum CreateError {
     IslandLocked { holder_id: String, holder_state: String },
-    CapReached,
+    /// The string names the running quests.
+    CapReached(String),
     Other(String),
 }
 
@@ -54,7 +57,9 @@ impl std::fmt::Display for CreateError {
             CreateError::IslandLocked { holder_id, holder_state } => {
                 write!(f, "island is held by session {holder_id} ({holder_state})")
             }
-            CreateError::CapReached => write!(f, "3 quests are running; stop one first"),
+            CreateError::CapReached(names) => {
+                write!(f, "3 quests are running ({names}); stop one first")
+            }
             CreateError::Other(e) => write!(f, "{e}"),
         }
     }
@@ -66,6 +71,9 @@ impl std::fmt::Display for TransitionError {
             TransitionError::NotFound => write!(f, "session not found"),
             TransitionError::BadMove { from, to } => {
                 write!(f, "session is {from}; it cannot move to {to}")
+            }
+            TransitionError::CapReached(names) => {
+                write!(f, "3 quests are running ({names}); stop one first")
             }
             TransitionError::Other(e) => write!(f, "{e}"),
         }
@@ -242,19 +250,49 @@ impl Store {
         to: &str,
     ) -> Result<Session, TransitionError> {
         let conn = self.conn.lock().map_err(|e| TransitionError::Other(e.to_string()))?;
-        let from: Option<String> = conn
-            .query_row("SELECT state FROM sessions WHERE id = ?1", params![id], |r| {
-                r.get(0)
-            })
-            .ok();
-        let Some(from) = from else {
-            return Err(TransitionError::NotFound);
+        let from: String = match conn.query_row(
+            "SELECT state FROM sessions WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        ) {
+            Ok(state) => state,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Err(TransitionError::NotFound)
+            }
+            Err(e) => return Err(TransitionError::Other(e.to_string())),
         };
         if !allowed_from.contains(&from.as_str()) {
             return Err(TransitionError::BadMove {
                 from,
                 to: to.to_string(),
             });
+        }
+        // A move into `working` checks the 3-spawned-quest cap in
+        // this same lock. A session with no worktree runs no agent
+        // and does not count toward the cap.
+        if to == "working" {
+            let own_worktree: Option<String> = conn
+                .query_row(
+                    "SELECT worktree_path FROM sessions WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| TransitionError::Other(e.to_string()))?;
+            if own_worktree.is_some() {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT COALESCE(task, id) FROM sessions WHERE state = 'working' AND worktree_path IS NOT NULL AND id != ?1",
+                    )
+                    .map_err(|e| TransitionError::Other(e.to_string()))?;
+                let names = stmt
+                    .query_map(params![id], |r| r.get::<_, String>(0))
+                    .map_err(|e| TransitionError::Other(e.to_string()))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| TransitionError::Other(e.to_string()))?;
+                if names.len() >= 3 {
+                    return Err(TransitionError::CapReached(names.join(", ")));
+                }
+            }
         }
         conn.execute(
             "UPDATE sessions SET state = ?2, updated_ms = ?3 WHERE id = ?1 AND state = ?4",
@@ -269,19 +307,23 @@ impl Store {
 
     /// Create a session with the island lock and the spawned-quest
     /// cap checked in the same lock as the insert, so a double
-    /// submit cannot take one island twice or pass the cap.
+    /// submit cannot take one island twice or pass the cap. The
+    /// worktree path is written at insert (the caller creates the
+    /// worktree at that exact path next), so a just-created quest
+    /// already counts toward the cap.
     pub fn create_session_guarded(
         &self,
         repo_path: &str,
         island_id: Option<&str>,
         task: Option<&str>,
-        spawned: bool,
+        worktree_root: Option<&str>,
     ) -> Result<Session, CreateError> {
         let now = crate::events::now_ms();
+        let id = uuid::Uuid::new_v4().to_string();
         let session = Session {
-            id: uuid::Uuid::new_v4().to_string(),
+            worktree_path: worktree_root.map(|root| format!("{root}/{id}")),
+            id,
             repo_path: repo_path.to_string(),
-            worktree_path: None,
             island_id: island_id.map(str::to_string),
             task: task.map(|t| redact::redact_text(t, &self.secrets)),
             state: "working".to_string(),
@@ -305,22 +347,25 @@ impl Store {
                 });
             }
         }
-        if spawned {
-            let count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sessions WHERE state = 'working' AND worktree_path IS NOT NULL",
-                    [],
-                    |r| r.get(0),
+        if worktree_root.is_some() {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT COALESCE(task, id) FROM sessions WHERE state = 'working' AND worktree_path IS NOT NULL",
                 )
                 .map_err(|e| CreateError::Other(e.to_string()))?;
-            if count >= 3 {
-                return Err(CreateError::CapReached);
+            let names = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| CreateError::Other(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| CreateError::Other(e.to_string()))?;
+            if names.len() >= 3 {
+                return Err(CreateError::CapReached(names.join(", ")));
             }
         }
         conn.execute(
             "INSERT INTO sessions (id, repo_path, worktree_path, island_id, task, state, cli_session_id, created_ms, updated_ms)
-             VALUES (?1, ?2, NULL, ?3, ?4, 'working', NULL, ?5, ?5)",
-            params![session.id, session.repo_path, session.island_id, session.task, now],
+             VALUES (?1, ?2, ?3, ?4, ?5, 'working', NULL, ?6, ?6)",
+            params![session.id, session.repo_path, session.worktree_path, session.island_id, session.task, now],
         )
         .map_err(|e| CreateError::Other(e.to_string()))?;
         Ok(session)
@@ -614,6 +659,65 @@ mod tests {
         assert!(store.island_lock_holder("/repo", "api", None).unwrap().is_none());
         // A different island or repo is a different lock.
         assert!(store.island_lock_holder("/repo", "web", None).unwrap().is_none());
+    }
+
+    #[test]
+    fn guarded_create_holds_lock_and_cap_at_insert() {
+        let store = Store::in_memory().unwrap();
+        let a = store
+            .create_session_guarded("/repo", Some("api"), Some("one"), Some("/wts"))
+            .unwrap();
+        assert!(a.worktree_path.as_deref().is_some_and(|p| p.ends_with(&a.id)));
+        // Same island is locked at insert, not after a race window.
+        assert!(matches!(
+            store.create_session_guarded("/repo", Some("api"), Some("two"), None),
+            Err(CreateError::IslandLocked { .. })
+        ));
+        store
+            .create_session_guarded("/repo", Some("web"), Some("two"), Some("/wts"))
+            .unwrap();
+        store
+            .create_session_guarded("/repo", Some("db"), Some("three"), Some("/wts"))
+            .unwrap();
+        // Three spawned quests run: the fourth is refused by name.
+        match store.create_session_guarded("/repo", None, Some("four"), Some("/wts")) {
+            Err(CreateError::CapReached(names)) => {
+                assert!(names.contains("one") && names.contains("three"), "{names}")
+            }
+            other => panic!("expected cap, got {other:?}"),
+        }
+        // Watcher-only sessions do not count and are not refused.
+        assert!(store
+            .create_session_guarded("/repo", None, Some("watch"), None)
+            .is_ok());
+    }
+
+    #[test]
+    fn move_into_working_checks_the_cap_in_the_same_move() {
+        let store = Store::in_memory().unwrap();
+        let mut ids = Vec::new();
+        for island in ["a", "b", "c"] {
+            ids.push(
+                store
+                    .create_session_guarded("/repo", Some(island), Some(island), Some("/wts"))
+                    .unwrap()
+                    .id,
+            );
+        }
+        store.transition_state(&ids[2], &["working"], "paused").unwrap();
+        let d = store
+            .create_session_guarded("/repo", Some("d"), Some("d-task"), Some("/wts"))
+            .unwrap();
+        store.transition_state(&d.id, &["working"], "paused").unwrap();
+        // Resume c: 3 run again. Resume d: the cap refuses the move.
+        store.transition_state(&ids[2], &["paused"], "working").unwrap();
+        match store.transition_state(&d.id, &["paused"], "working") {
+            Err(TransitionError::CapReached(names)) => {
+                assert!(names.contains('a') && !names.contains("d-task"), "{names}")
+            }
+            other => panic!("expected cap, got {other:?}"),
+        }
+        assert_eq!(store.get_session(&d.id).unwrap().unwrap().state, "paused");
     }
 
     #[test]
