@@ -20,7 +20,8 @@ Roadmap step 2. Gate order matters:
 
 1. **T1 — Meta AI tooling rule check comes before any adapter code.** It needs the user (accepting the Official Rules in the portal, Discord #office-hours for ambiguity). Don't write adapter code (T3) or the permission bridge (T8) until T1's answer is recorded in `docs/meta-tooling-rule.md`.
 2. **Can start without T1:**
-   - T2: Oxc extraction spike (directory-first islands, import bridges, parsed/resolved/unresolved counts). Use the user's friend's repo once it exists; until then a TS/JS fixture repo, labeled as a stand-in.
+   - T2: Oxc extraction spike (directory-first islands, import bridges, parsed/resolved/unresolved counts). Done against a stand-in TS/JS fixture.
+   - T13: single-package districts (feature/module directories) and Python extraction, tested on GestiKo (the available real repo: one TS frontend package plus a Python backend in a single repo). Added by the 2026-10-26 amendment in `specs/design.md`. Go extraction only at the end of the hackathon if time remains; not committed scope. Multi-repo stays out of scope.
    - T11: port `prototype/sprite-spike/` into a client module, with its geometry checks as Vitest tests against `assets/sprites/`.
 3. **Day-3 kill gate:** one repo, one session, directory islands, motion only on real file events, English report lands. If it fails, cut visual fidelity, never the control loop or drag-connect.
 

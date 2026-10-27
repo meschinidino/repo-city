@@ -1,6 +1,6 @@
 # Roadmap
 
-From the approved design ([specs/design.md](specs/design.md)): its Next Steps, the ten-day plan, gates and tasks T1–T12, in order, plus the gstack skills to run at each point. Submission is due **Nov 4, 9:00 PM ET**. Cut order if late: polish → pause/resume → Louvain → overlap marker. Never cut: real event mapping, finish flow, failure states, English reports, drag-connect.
+From the approved design ([specs/design.md](specs/design.md)): its Next Steps, the ten-day plan, gates and tasks T1–T13, in order, plus the gstack skills to run at each point. Submission is due **Nov 4, 9:00 PM ET**. Cut order if late: polish → pause/resume → Louvain → overlap marker. Never cut: real event mapping, finish flow, failure states, English reports, drag-connect.
 
 Lines marked **▸ gstack** are reminders for whoever is working (Dino, Claude Code or Muse Code). Run the skill at that point; type it as a slash command (for example `/review`).
 
@@ -24,18 +24,19 @@ Lines marked **▸ gstack** are reminders for whoever is working (Dino, Claude C
 
 Setup (Dino):
 - Trust this folder in Muse Code, or it won't load `AGENTS.md`.
-- Get the vibe-coder friend's real repo; until then T2 runs on a labeled stand-in fixture.
+- Demo repo received: GestiKo (single-package TS frontend plus Python backend). T2 ran on a labeled stand-in fixture; T13 covers GestiKo.
 - Confirm team size and name one owner per spike.
 
 Work:
 - T1 (Dino): accept the Official Rules in the portal and settle what counts for "Use of Meta AI tooling" (25%) before any adapter code. Ask in Discord #office-hours whether building with Muse Code counts, then decide Llama's and Muse's roles. Record it in `docs/meta-tooling-rule.md`.
-- T2 (can start now): Oxc extraction — directory-first islands, import bridges, file roles for building types, parsed/resolved/unresolved counts.
+- T2 (can start now): Oxc extraction — directory-first islands, import bridges, file roles for building types, parsed/resolved/unresolved counts. Done against a stand-in fixture.
+- T13 (can start now): single-package districts (feature/module directories) and Python extraction, tested on GestiKo. Added 2026-10-26 because the available real repo is a single-package TypeScript frontend plus a Python backend, not a TS monorepo (amendment in specs/design.md). Go extraction only at the end of the hackathon if time remains; not committed scope.
 - T11 (can start now): port the sprite pipeline from step 1 into the client; its geometry checks become Vitest tests and run at load; tile edge error under 1%.
 - T3 (after T1): normalized event enum with the Claude Code adapter (primary) and Codex (fallback), held to the pass thresholds.
 - T8 (after T1): permission bridge per CLI and secret redaction with the planted-secret test.
   - **▸ gstack `/cso`** on the permission bridge and redaction before it merges.
 - Record labeled-simulated CLI event fixtures once the event enum is frozen, so the client can be built in parallel (lane B in the design doc).
-- Paper-test the 3-minute story on the friend: he must retell what his repo does in 20 seconds.
+- Paper-test the 3-minute story on the demo repo's owner: they must retell what the repo does in 20 seconds.
 
 ## 3. Live loop on the map (day-3 kill gate)
 
@@ -82,7 +83,7 @@ Work:
   - **▸ gstack `/devex-review`** on the clean-clone run, the way a judge would try it.
 - **▸ gstack `/design-review`** on the final map and UI, and **`/qa-only`** for a last bug report across all five journeys.
 - **▸ gstack `/document-release`** so the README, DESIGN.md and docs match what shipped.
-- Rehearse the exact 3-minute demo on the friend's repo; record one live run, label anything sped up or cut on screen.
+- Rehearse the exact 3-minute demo on the demo repo (GestiKo); record one live run, label anything sped up or cut on screen.
 - Submit on the Cerebral Valley platform with every teammate listed, the video, and this repo verified in a logged-out browser.
 - Bonus prizes: post the demo on X and submit the link (Most Viral, counted through Nov 8, 11:59 PM ET); share the gallery entry (Community Vote).
 - **▸ gstack `/retro`** after submission.
