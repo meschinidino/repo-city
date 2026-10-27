@@ -57,6 +57,7 @@ impl Store {
     fn init(conn: Connection) -> Result<Store, String> {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
              CREATE TABLE IF NOT EXISTS sessions (
                id TEXT PRIMARY KEY,
                repo_path TEXT NOT NULL,
@@ -99,7 +100,9 @@ impl Store {
             repo_path: repo_path.to_string(),
             worktree_path: worktree_path.map(str::to_string),
             island_id: island_id.map(str::to_string),
-            task: task.map(str::to_string),
+            // The task is free text from the user and can quote a
+            // credential; it is stored only after redaction.
+            task: task.map(|t| redact::redact_text(t, &self.secrets)),
             state: "working".to_string(),
             cli_session_id: None,
             created_ms: now,
@@ -358,6 +361,30 @@ mod tests {
         assert!(
             matches!(&events[0].payload, EventPayload::AgentMessage { text } if text.contains("[redacted]"))
         );
+    }
+
+    #[test]
+    fn session_task_is_redacted_before_storage() {
+        let store = Store::in_memory().unwrap();
+        // Assembled at runtime so no literal credential sits in source.
+        let planted = ["sk-", "abcdefghijklmnopqrst", "uvwxyz0123456789"].concat();
+        let s = store
+            .create_session(
+                "/repo",
+                None,
+                None,
+                Some(&format!("use key {planted} please")),
+            )
+            .unwrap();
+        assert!(
+            s.task
+                .as_deref()
+                .is_some_and(|t| t.contains("[redacted]") && !t.contains(&planted[..8])),
+            "task: {:?}",
+            s.task
+        );
+        let got = store.get_session(&s.id).unwrap().unwrap();
+        assert_eq!(got.task, s.task);
     }
 
     #[test]

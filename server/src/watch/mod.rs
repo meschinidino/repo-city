@@ -48,13 +48,20 @@ pub fn git_status_changes(root: &Path) -> Result<Vec<FileChange>, String> {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
     let text = String::from_utf8_lossy(&out.stdout);
+    // Porcelain -z entries are "XY <path>"; renames/copies carry a
+    // second NUL-separated field with the original path, consumed here
+    // so it is never parsed as a bogus entry of its own.
+    let mut entries = text.split('\0').peekable();
     let mut changes = Vec::new();
-    for entry in text.split('\0') {
+    while let Some(entry) = entries.next() {
         if entry.len() < 4 {
             continue;
         }
         let code = &entry[..2];
         let path = entry[3..].to_string();
+        if code.contains('R') || code.contains('C') {
+            let _ = entries.next(); // original path of the rename/copy
+        }
         let change = if code == "??" {
             ChangeKind::Created
         } else if code.contains('D') {
@@ -105,13 +112,20 @@ impl RepoWatcher {
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
+        // Even under steady churn the oldest pending change flushes
+        // within this cap; the debounce only coalesces bursts.
+        let max_wait = debounce.max(Duration::from_millis(250)) * 8;
         let handle = std::thread::spawn(move || {
             let mut pending: BTreeMap<String, ChangeKind> = BTreeMap::new();
             let mut last = Instant::now();
+            let mut first_pending: Option<Instant> = None;
             loop {
                 match rx.recv_timeout(Duration::from_millis(25)) {
                     Ok((path, change)) => {
                         if let Ok(rel) = path.strip_prefix(&root) {
+                            if pending.is_empty() {
+                                first_pending = Some(Instant::now());
+                            }
                             pending.insert(rel.to_string_lossy().replace('\\', "/"), change);
                             last = Instant::now();
                         }
@@ -119,13 +133,20 @@ impl RepoWatcher {
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
-                if !pending.is_empty() && last.elapsed() >= debounce {
+                let due = last.elapsed() >= debounce
+                    || first_pending.is_some_and(|t| t.elapsed() >= max_wait);
+                if !pending.is_empty() && due {
+                    first_pending = None;
                     for (path, change) in std::mem::take(&mut pending) {
                         // Atomic-write temp files (write-then-rename)
                         // vanish inside the window; they were never
                         // repo files and must not light a building.
-                        if change != ChangeKind::Deleted && !root.join(&path).exists() {
-                            continue;
+                        // Directories are not buildings either.
+                        if change != ChangeKind::Deleted {
+                            let full = root.join(&path);
+                            if !full.exists() || full.is_dir() {
+                                continue;
+                            }
                         }
                         sink(EventPayload::FileTouched { path, change });
                     }
@@ -153,5 +174,51 @@ impl RepoWatcher {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    #[test]
+    fn git_status_sees_modified_untracked_and_renames_without_bogus_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.email", "t@t"]);
+        git(root, &["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "init"]);
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        std::fs::write(root.join("new.txt"), "new\n").unwrap();
+        git(root, &["mv", "a.txt", "b.txt"]);
+
+        let changes = git_status_changes(root).unwrap();
+        let paths: Vec<&str> = changes.iter().map(|c| c.path.as_str()).collect();
+        // a.txt must not appear as its own bogus entry from the
+        // rename's second -z field.
+        assert!(!paths.contains(&"a.txt"), "changes: {paths:?}");
+        assert!(paths.contains(&"b.txt"), "changes: {paths:?}");
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.path == "new.txt" && c.change == ChangeKind::Created),
+            "changes: {changes:?}"
+        );
     }
 }

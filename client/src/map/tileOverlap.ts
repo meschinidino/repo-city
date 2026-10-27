@@ -47,21 +47,20 @@ export function measureTileOverlap(tile: PixelData, east: PixelData, south: Pixe
   return { overlapPx, topPx, overlapPct: topPx ? (overlapPx / topPx) * 100 : 0 };
 }
 
-/** Worst arrangement: every fitted tile against every possible neighbour. */
+/** Worst arrangement: every fitted tile against every neighbour in
+ * both the east and the south slot, mixed with itself. */
 export function worstTileOverlap(tiles: PixelData[]): OverlapMeasure & { tile: number; east: number; south: number } {
-  let worst: OverlapMeasure & { tile: number; east: number; south: number } = {
-    overlapPx: 0,
-    topPx: 0,
-    overlapPct: 0,
-    tile: -1,
-    east: -1,
-    south: -1,
+  let worst: (OverlapMeasure & { tile: number; east: number; south: number }) | null = null;
+  const consider = (m: OverlapMeasure, tile: number, east: number, south: number) => {
+    // Seed from the first real measurement so a zero-overlap world
+    // still reports the pixels that were actually sampled.
+    if (!worst || m.overlapPct > worst.overlapPct) worst = { ...m, tile, east, south };
   };
   for (let i = 0; i < tiles.length; i++) {
     for (let e = 0; e < tiles.length; e++) {
-      const m = measureTileOverlap(tiles[i], tiles[e], tiles[e]);
-      if (m.overlapPct > worst.overlapPct) worst = { ...m, tile: i, east: e, south: e };
+      consider(measureTileOverlap(tiles[i], tiles[e], tiles[i]), i, e, i);
+      consider(measureTileOverlap(tiles[i], tiles[i], tiles[e]), i, i, e);
     }
   }
-  return worst;
+  return worst ?? { overlapPx: 0, topPx: 0, overlapPct: 0, tile: -1, east: -1, south: -1 };
 }

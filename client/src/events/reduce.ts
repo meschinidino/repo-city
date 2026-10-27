@@ -16,8 +16,11 @@ export interface SessionView {
   shipFile: string | null;
   /** True when the last touch could not be mapped to a building. */
   locationUnknown: boolean;
-  /** Files lit by real touches, in first-touch order. */
+  /** Files lit by real (watcher) touches, in first-touch order. */
   litFiles: string[];
+  /** Files the CLI says it edited: intent only (D8). The watcher
+   * confirms or refutes these; they never light a building alone. */
+  intentFiles: string[];
   /** Latest test pennant: true = passing, false = failing. */
   testPassed: boolean | null;
   messages: string[];
@@ -33,6 +36,7 @@ export function initialView(sessionId: string, homeIsland: string | null): Sessi
     shipFile: null,
     locationUnknown: false,
     litFiles: [],
+    intentFiles: [],
     testPassed: null,
     messages: [],
     lastSeq: 0,
@@ -51,13 +55,25 @@ export function applyEvent(
   fileToIsland: ReadonlyMap<string, string>,
 ): SessionView {
   if (event.session_id !== view.sessionId || event.seq <= view.lastSeq) return view;
-  const next: SessionView = { ...view, lastSeq: event.seq, messages: [...view.messages], litFiles: [...view.litFiles] };
+  const next: SessionView = {
+    ...view,
+    lastSeq: event.seq,
+    messages: [...view.messages],
+    litFiles: [...view.litFiles],
+    intentFiles: [...view.intentFiles],
+  };
   switch (event.type) {
     case "session_started":
       next.state = "working";
       if (event.cli_session_id) next.cliSessionId = event.cli_session_id;
       break;
     case "file_touched": {
+      // D8: the watcher is ground truth; CLI touches are intent.
+      // Only a watcher touch moves the ship or lights a building.
+      if (event.source !== "watcher") {
+        if (!next.intentFiles.includes(event.path)) next.intentFiles.push(event.path);
+        break;
+      }
       const island = fileToIsland.get(event.path);
       if (island) {
         next.shipIsland = island;
@@ -68,7 +84,11 @@ export function applyEvent(
         next.shipFile = null;
         next.locationUnknown = true;
       }
-      if (!next.litFiles.includes(event.path)) next.litFiles.push(event.path);
+      if (event.change === "deleted") {
+        next.litFiles = next.litFiles.filter((f) => f !== event.path);
+      } else if (!next.litFiles.includes(event.path)) {
+        next.litFiles.push(event.path);
+      }
       break;
     }
     case "command_run":

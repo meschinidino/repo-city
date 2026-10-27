@@ -25,6 +25,11 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub tx: broadcast::Sender<StoredEvent>,
     watchers: Mutex<HashMap<String, RepoWatcher>>,
+    children: Mutex<HashMap<String, tokio::process::Child>>,
+    /// Serializes append+broadcast so the channel can never deliver
+    /// events out of global-id order (a live client drops any event
+    /// whose id is below the last one it saw).
+    emit_lock: Arc<Mutex<()>>,
     debounce: Duration,
 }
 
@@ -37,6 +42,7 @@ impl AppState {
         source: Source,
         payload: EventPayload,
     ) -> Result<StoredEvent, String> {
+        let _guard = self.emit_lock.lock().unwrap();
         let event = self.store.append(session_id, source, payload)?;
         let _ = self.tx.send(event.clone());
         Ok(event)
@@ -46,8 +52,10 @@ impl AppState {
         let state_root = root.to_path_buf();
         let store = self.store.clone();
         let tx = self.tx.clone();
+        let emit_lock = self.emit_lock.clone();
         let sid = session_id.to_string();
         match RepoWatcher::spawn(root, self.debounce, move |payload| {
+            let _guard = emit_lock.lock().unwrap();
             if let Ok(event) = store.append(&sid, Source::Watcher, payload) {
                 let _ = tx.send(event);
             }
@@ -60,6 +68,57 @@ impl AppState {
                     .insert(session_id.to_string(), watcher);
             }
             Err(e) => eprintln!("watcher failed for {session_id}: {e}"),
+        }
+        // git-status backstop (D8: notify + git status): poll every
+        // 5 s and emit watcher touches for change-set transitions the
+        // notify stream missed. The seen-set keeps a persistent
+        // uncommitted change from re-emitting on every tick.
+        {
+            let store = self.store.clone();
+            let tx = self.tx.clone();
+            let emit_lock = self.emit_lock.clone();
+            let sid = session_id.to_string();
+            let root = root.to_path_buf();
+            tokio::spawn(async move {
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut tick = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    tick.tick().await;
+                    // The backstop dies with the session: a stopped or
+                    // finished session must not keep logging touches.
+                    match store.get_session(&sid) {
+                        Ok(Some(s)) if s.state == "working" => {}
+                        _ => break,
+                    }
+                    let Ok(changes) = tokio::task::spawn_blocking({
+                        let r = root.clone();
+                        move || crate::watch::git_status_changes(&r)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string())) else {
+                        continue;
+                    };
+                    let mut current = std::collections::HashSet::new();
+                    for c in changes {
+                        let key = format!("{}:{:?}", c.path, c.change);
+                        current.insert(key.clone());
+                        if seen.insert(key) {
+                            let _guard = emit_lock.lock().unwrap();
+                            if let Ok(event) = store.append(
+                                &sid,
+                                Source::Watcher,
+                                EventPayload::FileTouched {
+                                    path: c.path,
+                                    change: c.change,
+                                },
+                            ) {
+                                let _ = tx.send(event);
+                            }
+                        }
+                    }
+                    seen.retain(|k| current.contains(k));
+                }
+            });
         }
     }
 }
@@ -74,6 +133,8 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         store,
         tx,
         watchers: Mutex::new(HashMap::new()),
+        children: Mutex::new(HashMap::new()),
+        emit_lock: Arc::new(Mutex::new(())),
         debounce,
     });
     Router::new()
@@ -209,6 +270,13 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
         let Some(stdout) = child.stdout.take() else {
             return;
         };
+        // Registered so /stop can kill the agent; the reader task
+        // below owns the exit wait through this same handle.
+        state
+            .children
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), child);
         // The CLI reports canonical paths (e.g. /private/tmp on
         // macOS); strip the canonical session root, not the raw one.
         let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
@@ -243,7 +311,23 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
                 let _ = state.emit(&session_id, Source::Cli, payload);
             }
         }
-        let status = child.wait().await;
+        // If /stop killed the child, it already removed the handle
+        // and set the state; do not overwrite either.
+        let mut child = state.children.lock().unwrap().remove(&session_id);
+        let stopped_externally = child.is_none()
+            || state
+                .store
+                .get_session(&session_id)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.state == "stopped");
+        let status = match child.as_mut() {
+            Some(c) => c.wait().await.map_err(|e| e.to_string()),
+            None => Err("child already reaped".to_string()),
+        };
+        if stopped_externally {
+            return;
+        }
         if finish_state.is_none() {
             let ok = status.map(|s| s.success()).unwrap_or(false);
             let _ = state.emit(
@@ -354,8 +438,24 @@ async fn stop_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(watcher) = state.watchers.lock().unwrap().remove(&id) {
+    match state.store.get_session(&id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response()
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+    // Take the watcher out first so the mutex is not held while its
+    // thread joins, then kill the agent so it cannot keep editing
+    // unwatched after the stop.
+    let watcher = state.watchers.lock().unwrap().remove(&id);
+    if let Some(watcher) = watcher {
         watcher.stop();
+    }
+    let mut child = state.children.lock().unwrap().remove(&id);
+    if let Some(child) = child.as_mut() {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
     }
     let _ = state.store.set_state(&id, "stopped");
     match state.emit(
@@ -417,7 +517,18 @@ async fn ws_socket(state: Arc<AppState>, since_id: i64, socket: WebSocket) {
                         let Ok(text) = serde_json::to_string(&event) else { continue };
                         if sink.send(Message::Text(text.into())).await.is_err() { break; }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // The channel dropped events while we were
+                        // busy; recover them from SQLite instead of
+                        // silently losing them.
+                        if let Ok(missed) = state.store.events_since(last_id, 100_000) {
+                            for event in missed {
+                                last_id = event.id;
+                                let Ok(text) = serde_json::to_string(&event) else { continue };
+                                if sink.send(Message::Text(text.into())).await.is_err() { return; }
+                            }
+                        }
+                    }
                     Err(_) => break,
                 }
             }

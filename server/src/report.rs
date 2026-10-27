@@ -16,6 +16,12 @@ pub struct FileDiff {
     pub path: String,
     pub insertions: i64,
     pub deletions: i64,
+    /// git reports binary files as `-` in numstat; they are changed,
+    /// never "new" just because their line counts are zero.
+    pub binary: bool,
+    /// True only for untracked files (from `git status`), the one
+    /// honest source for "new".
+    pub new_file: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -69,10 +75,13 @@ pub fn diff_report(root: &Path) -> DiffReport {
         let (Some(ins), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
             continue;
         };
+        let binary = ins == "-" && del == "-";
         files.push(FileDiff {
             path: path.to_string(),
             insertions: ins.parse().unwrap_or(0),
             deletions: del.parse().unwrap_or(0),
+            binary,
+            new_file: false,
         });
     }
     if let Ok(status) = git(root, &["status", "--porcelain=v1"]) {
@@ -83,6 +92,8 @@ pub fn diff_report(root: &Path) -> DiffReport {
                         path: path.to_string(),
                         insertions: 0,
                         deletions: 0,
+                        binary: false,
+                        new_file: true,
                     });
                 }
             }
@@ -125,11 +136,19 @@ fn summarize(files: &[FileDiff], insertions: i64, deletions: i64) -> String {
     }
     let new: Vec<&str> = files
         .iter()
-        .filter(|f| f.insertions == 0 && f.deletions == 0)
+        .filter(|f| f.new_file)
         .map(|f| f.path.as_str())
         .collect();
     if !new.is_empty() {
         summary.push_str(&format!(" New files: {}.", new.join(", ")));
+    }
+    let binaries: Vec<&str> = files
+        .iter()
+        .filter(|f| f.binary)
+        .map(|f| f.path.as_str())
+        .collect();
+    if !binaries.is_empty() {
+        summary.push_str(&format!(" Binary files changed: {}.", binaries.join(", ")));
     }
     summary
 }
@@ -145,5 +164,53 @@ mod tests {
         assert!(!report.available);
         assert_eq!(report.generated_by, "template_from_diff");
         assert!(report.reason.is_some());
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    #[test]
+    fn modified_binary_is_changed_not_new_and_untracked_is_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.email", "t@t"]);
+        git(root, &["config", "user.name", "t"]);
+        std::fs::write(root.join("img.bin"), [0u8, 1, 2, 3]).unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "init"]);
+        std::fs::write(root.join("img.bin"), [9u8, 8, 7]).unwrap();
+        std::fs::write(root.join("fresh.txt"), "hi\n").unwrap();
+
+        let report = diff_report(root);
+        assert!(report.available);
+        let bin = report.files.iter().find(|f| f.path == "img.bin").unwrap();
+        assert!(bin.binary && !bin.new_file, "files: {:?}", report.files);
+        let fresh = report.files.iter().find(|f| f.path == "fresh.txt").unwrap();
+        assert!(fresh.new_file && !fresh.binary, "files: {:?}", report.files);
+        assert!(
+            report.summary.contains("Binary files changed: img.bin"),
+            "{}",
+            report.summary
+        );
+        assert!(
+            report.summary.contains("New files: fresh.txt"),
+            "{}",
+            report.summary
+        );
+        assert!(
+            !report.summary.contains("New files: img.bin"),
+            "{}",
+            report.summary
+        );
     }
 }

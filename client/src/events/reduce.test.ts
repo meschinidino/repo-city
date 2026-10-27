@@ -35,6 +35,23 @@ describe("event reduction (simulated events)", () => {
     expect(v.litFiles).toEqual(["web/app.tsx"]);
   });
 
+  it("CLI touches are intent only: no ship move, no lit building (D8)", () => {
+    let v = initialView("s1", "api");
+    v = applyEvent(v, ev({ type: "session_started", seq: 1, source: "cli", cli_session_id: "c1" }), FILES);
+    v = applyEvent(v, ev({ type: "file_touched", seq: 2, source: "cli", path: "web/app.tsx", change: "modified" }), FILES);
+    expect(v.shipIsland).toBe("api");
+    expect(v.shipFile).toBeNull();
+    expect(v.litFiles).toEqual([]);
+    expect(v.intentFiles).toEqual(["web/app.tsx"]);
+    // The watcher confirming the same file is what lights it.
+    v = applyEvent(v, ev({ type: "file_touched", seq: 3, source: "watcher", path: "web/app.tsx", change: "modified" }), FILES);
+    expect(v.shipFile).toBe("web/app.tsx");
+    expect(v.litFiles).toEqual(["web/app.tsx"]);
+    // A watcher delete unlights it.
+    v = applyEvent(v, ev({ type: "file_touched", seq: 4, source: "watcher", path: "web/app.tsx", change: "deleted" }), FILES);
+    expect(v.litFiles).toEqual([]);
+  });
+
   it("unmappable touch keeps the ship at the gate, location unknown", () => {
     let v = initialView("s1", "api");
     v = applyEvent(v, ev({ type: "session_started", seq: 1, source: "system" }), FILES);

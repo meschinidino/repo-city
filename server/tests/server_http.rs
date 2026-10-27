@@ -125,6 +125,14 @@ async fn watcher_events_flow_over_http_and_websocket() {
     assert_eq!(report["generated_by"], "template_from_diff");
     assert!(report["events"].as_array().is_some_and(|e| !e.is_empty()));
 
+    // Stop on an unknown session is a 404, not an orphan event.
+    let missing = client
+        .post(format!("{base}/api/sessions/no-such-session/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+
     // Stop ends the session with a stopped outcome.
     let stopped: serde_json::Value = client
         .post(format!("{base}/api/sessions/{session_id}/stop"))
