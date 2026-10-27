@@ -187,8 +187,9 @@ export interface BridgeDeck {
 }
 
 /** Deck geometry for a shore-to-shore span: corners in grid space,
- * half width growing slowly with the import count. */
-export function bridgeDeck(
+ * half width growing slowly with the import count. Named apart
+ * from the test map's axis-aligned bridgeDeck on purpose. */
+export function cityBridgeDeck(
   span: [{ gx: number; gy: number }, { gx: number; gy: number }],
   count: number,
 ): BridgeDeck {
@@ -209,6 +210,35 @@ export function bridgeDeck(
       { gx: b.gx + perp.gx, gy: b.gy + perp.gy },
       { gx: a.gx + perp.gx, gy: a.gy + perp.gy },
     ],
+  };
+}
+
+export interface BridgeChevron {
+  tip: { gx: number; gy: number };
+  wingA: { gx: number; gy: number };
+  wingB: { gx: number; gy: number };
+}
+
+/**
+ * Direction chevron in grid space for a span: tip toward the
+ * imported island, wings sized from the deck's own half-width so
+ * the arrow never sticks out past the rails. Reversing the span
+ * reverses the chevron (two-way imports get one at each end).
+ */
+export function bridgeChevron(
+  span: [{ gx: number; gy: number }, { gx: number; gy: number }],
+  deck: BridgeDeck,
+): BridgeChevron {
+  const [a, b] = span;
+  const len = Math.hypot(b.gx - a.gx, b.gy - a.gy);
+  const ux = (b.gx - a.gx) / len;
+  const uy = (b.gy - a.gy) / len;
+  const cx = a.gx + (b.gx - a.gx) * 0.88;
+  const cy = a.gy + (b.gy - a.gy) * 0.88;
+  return {
+    tip: { gx: cx + ux * 0.45, gy: cy + uy * 0.45 },
+    wingA: { gx: cx - ux * 0.3 + deck.perp.gx * 0.8, gy: cy - uy * 0.3 + deck.perp.gy * 0.8 },
+    wingB: { gx: cx - ux * 0.3 - deck.perp.gx * 0.8, gy: cy - uy * 0.3 - deck.perp.gy * 0.8 },
   };
 }
 

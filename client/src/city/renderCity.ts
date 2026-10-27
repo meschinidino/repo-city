@@ -3,7 +3,7 @@ import type { World } from "../map/pipeline";
 import { PLAIN_GRASS_INDEX } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeDeck, bridgeSpan, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
+import { bridgeChevron, bridgeSpan, cityBridgeDeck, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -208,6 +208,7 @@ export class CityView {
     // chevron near the far end points along the import direction.
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
     const bridges = new Graphics();
+    const deckList: { span: [{ gx: number; gy: number }, { gx: number; gy: number }]; deck: ReturnType<typeof cityBridgeDeck> }[] = [];
     for (const br of this.layout.bridges) {
       const a = byId.get(br.from);
       const b = byId.get(br.to);
@@ -217,7 +218,7 @@ export class CityView {
         { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
       );
       if (!span) continue;
-      const deck = bridgeDeck(span, br.count);
+      const deck = cityBridgeDeck(span, br.count);
       const P = (gx: number, gy: number, z = 0): [number, number] => {
         const [x, y] = proj.project(gx, gy);
         return [x, y - z * TW];
@@ -252,18 +253,22 @@ export class CityView {
         bridges.lineTo(q2[0], q2[1]);
       }
       bridges.stroke({ color: 0x5a3c1e, alpha: 0.5, width: Math.max(1, TW / 90) });
-      // rope rails: posts up, sagging rope between them
+      // rope rails: posts up, sagging rope between them. The post
+      // spacing divides the span evenly so the last post lands on
+      // the far shore instead of hanging mid-sag.
+      const railSteps = Math.max(1, Math.round(deck.len / 0.7));
+      const railStep = deck.len / railSteps;
       for (const v of [-1, 1]) {
-        for (let s = 0; s <= deck.len + 1e-6; s += 0.7) {
-          const p = at(Math.min(1, s / deck.len), v);
-          const q2 = at(Math.min(1, s / deck.len), v, 0.11);
+        for (let i = 0; i <= railSteps; i++) {
+          const p = at(i / railSteps, v);
+          const q2 = at(i / railSteps, v, 0.11);
           bridges.moveTo(p[0], p[1]);
           bridges.lineTo(q2[0], q2[1]);
         }
         bridges.stroke({ color: 0x5b3e25, width: Math.max(1, TW * 0.022) });
         let first = true;
         for (let s = 0; s <= deck.len + 1e-6; s += 0.07) {
-          const sag = 0.025 * Math.sin(((s % 0.7) / 0.7) * Math.PI);
+          const sag = 0.025 * Math.sin(((s % railStep) / railStep) * Math.PI);
           const p = at(Math.min(1, s / deck.len), v, 0.1 - sag);
           if (first) {
             bridges.moveTo(p[0], p[1]);
@@ -272,21 +277,24 @@ export class CityView {
         }
         bridges.stroke({ color: 0xd9c08c, width: Math.max(1, TW / 80) });
       }
-      // direction chevron on the deck: importer -> imported module
-      const mid = at(0.86, 0);
-      const fwd = at(0.97, 0);
-      const back = at(0.75, 0);
-      const ux = fwd[0] - back[0];
-      const uy = fwd[1] - back[1];
-      const ul = Math.hypot(ux, uy) || 1;
-      const nx = (-uy / ul) * TW * 0.16;
-      const ny = (ux / ul) * TW * 0.16;
-      bridges.moveTo(mid[0] - (ux / ul) * TW * 0.14 + nx, mid[1] - (uy / ul) * TW * 0.14 + ny);
-      bridges.lineTo(fwd[0], fwd[1]);
-      bridges.lineTo(mid[0] - (ux / ul) * TW * 0.14 - nx, mid[1] - (uy / ul) * TW * 0.14 - ny);
-      bridges.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
+      deckList.push({ span, deck });
     }
     root.addChild(bridges);
+    // Direction chevrons in a second pass over every deck: a
+    // two-way import draws two decks on the same span, and neither
+    // direction may paint over the other's arrow.
+    const chevrons = new Graphics();
+    for (const { span, deck } of deckList) {
+      const ch = bridgeChevron(span, deck);
+      const tip = proj.project(ch.tip.gx, ch.tip.gy);
+      const wa = proj.project(ch.wingA.gx, ch.wingA.gy);
+      const wb = proj.project(ch.wingB.gx, ch.wingB.gy);
+      chevrons.moveTo(wa[0], wa[1]);
+      chevrons.lineTo(tip[0], tip[1]);
+      chevrons.lineTo(wb[0], wb[1]);
+    }
+    chevrons.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
+    root.addChild(chevrons);
 
     // buildings, one sprite per file, placed by its plate footprint
     for (const b of this.layout.buildings) {
