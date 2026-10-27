@@ -174,8 +174,9 @@ fn rel_posix(root: &Path, path: &Path) -> String {
     }
 }
 
-fn collect_source_files(root: &Path) -> Vec<PathBuf> {
+fn collect_source_files(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
     let mut out = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -193,10 +194,20 @@ fn collect_source_files(root: &Path) -> Vec<PathBuf> {
                 continue;
             }
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+        let read_entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                errors.push(format!("{}: {err}", dir.display()));
+                continue;
+            }
         };
-        let mut entries: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        let mut entries: Vec<PathBuf> = Vec::new();
+        for entry in read_entries {
+            match entry {
+                Ok(entry) => entries.push(entry.path()),
+                Err(err) => errors.push(format!("{}: {err}", dir.display())),
+            }
+        }
         entries.sort();
         for entry in entries {
             let name = entry
@@ -205,16 +216,22 @@ fn collect_source_files(root: &Path) -> Vec<PathBuf> {
                 .to_string_lossy()
                 .into_owned();
             if entry.is_dir() {
-                if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
+                let is_venv = entry.join("pyvenv.cfg").exists();
+                if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') && !is_venv {
                     stack.push(entry);
                 }
             } else if is_source_file(&entry) {
-                out.push(entry);
+                let regular = entry
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.file_type().is_file() && !m.file_type().is_symlink());
+                if regular {
+                    out.push(entry);
+                }
             }
         }
     }
     out.sort();
-    out
+    (out, errors)
 }
 
 fn read_package_json(dir: &Path) -> Option<serde_json::Value> {
@@ -372,6 +389,7 @@ fn discover_islands(root: &Path, files: &[PathBuf]) -> Vec<IslandDef> {
                 entry_files: HashSet::new(),
             });
         }
+        dedupe_island_ids(&mut islands);
         return islands;
     }
     // Single-package districts: a `features/<name>` or `modules/<name>`
@@ -464,7 +482,24 @@ fn discover_islands(root: &Path, files: &[PathBuf]) -> Vec<IslandDef> {
             entry_files: HashSet::new(),
         });
     }
+    dedupe_island_ids(&mut islands);
     islands
+}
+
+fn dedupe_island_ids(islands: &mut [IslandDef]) {
+    let mut seen: HashSet<String> = HashSet::new();
+    for island in islands.iter_mut() {
+        if seen.insert(island.id.clone()) {
+            continue;
+        }
+        let mut candidate = island.rel_path.clone();
+        let mut n = 2;
+        while !seen.insert(candidate.clone()) {
+            candidate = format!("{}#{n}", island.rel_path);
+            n += 1;
+        }
+        island.id = candidate;
+    }
 }
 
 fn island_index_for(islands: &[IslandDef], file: &Path) -> Option<usize> {
@@ -504,23 +539,24 @@ fn parse_python_imports(source: &str) -> (Vec<ImportSpec>, Option<String>) {
             let dots = ".".repeat(level);
             let module = node.module.as_ref().map(|m| m.as_str()).unwrap_or("");
             let base = format!("{dots}{module}");
-            let mut candidates: Vec<String> = node
-                .names
-                .iter()
-                .map(|alias| {
-                    let name = alias.name.as_str();
-                    if module.is_empty() {
-                        format!("{dots}{name}")
-                    } else {
-                        format!("{base}.{name}")
-                    }
-                })
-                .collect();
-            candidates.push(base.clone());
-            self.specs.push(ImportSpec {
-                text: base,
-                candidates,
-            });
+            if node.names.is_empty() {
+                self.specs.push(ImportSpec {
+                    candidates: vec![base.clone()],
+                    text: base.clone(),
+                });
+            }
+            for alias in &node.names {
+                let name = alias.name.as_str();
+                let submodule = if module.is_empty() {
+                    format!("{dots}{name}")
+                } else {
+                    format!("{base}.{name}")
+                };
+                self.specs.push(ImportSpec {
+                    candidates: vec![submodule.clone(), base.clone()],
+                    text: submodule,
+                });
+            }
         }
     }
     let suite = match <Suite as rustpython_parser::Parse>::parse(source, "<module>") {
@@ -763,8 +799,11 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
         ));
     }
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let files_on_disk = collect_source_files(&root);
+    let (files_on_disk, discovery_errors) = collect_source_files(&root);
     let islands_def = discover_islands(&root, &files_on_disk);
+    let global_entry_files: HashSet<PathBuf> = read_package_json(&root)
+        .map(|pkg| package_entry_files(&root, &pkg))
+        .unwrap_or_default();
 
     let mut raw_files: Vec<RawFile> = Vec::new();
     for abs in &files_on_disk {
@@ -912,7 +951,8 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let is_entry = islands_def[file.island_idx].entry_files.contains(&canon)
+        let is_entry = global_entry_files.contains(&canon)
+            || islands_def[file.island_idx].entry_files.contains(&canon)
             || islands_def[file.island_idx]
                 .entry_files
                 .contains(&file.abs_path)
@@ -991,6 +1031,14 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
         })
         .collect();
 
+    let mut parse_errors = parse_errors;
+    for message in &discovery_errors {
+        let (file, msg) = message.split_once(": ").unwrap_or((message.as_str(), ""));
+        parse_errors.push(ParseError {
+            file: file.to_string(),
+            message: format!("discovery: {msg}"),
+        });
+    }
     unresolved.sort_by(|a, b| (&a.from_file, &a.specifier).cmp(&(&b.from_file, &b.specifier)));
 
     Ok(Extraction {
