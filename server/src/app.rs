@@ -212,6 +212,9 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/report", get(session_report))
         .route("/api/sessions/{id}/stop", post(stop_session))
         .route("/ws", get(ws_handler))
+        // Local single-user tool: the Vite dev client (another
+        // origin) must be able to call this API from the browser.
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
 }
 
