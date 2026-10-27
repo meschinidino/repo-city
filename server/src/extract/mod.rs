@@ -769,10 +769,25 @@ fn resolve_python_target(
         }
         candidates.push(base.join(parts.join("/")));
     } else {
+        // Python absolute imports resolve against sys.path roots, not
+        // every ancestor. A directory counts as a root when it is a
+        // project root (pyproject.toml, setup.py, or requirements.txt)
+        // or when it is not itself inside a package (no __init__.py).
+        // Package directories are skipped, so a sibling module inside a
+        // package cannot shadow the project-root module.
+        let mut roots: Vec<PathBuf> = Vec::new();
         let mut current = file.parent().map(Path::to_path_buf);
         while let Some(dir) = current {
-            candidates.push(dir.join(parts.join("/")));
+            let is_project_root = dir.join("pyproject.toml").exists()
+                || dir.join("setup.py").exists()
+                || dir.join("requirements.txt").exists();
+            if is_project_root || !dir.join("__init__.py").exists() {
+                roots.push(dir.clone());
+            }
             current = dir.parent().map(Path::to_path_buf);
+        }
+        for root in roots {
+            candidates.push(root.join(parts.join("/")));
         }
     }
     for candidate in candidates {
