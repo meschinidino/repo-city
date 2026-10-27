@@ -209,7 +209,18 @@ export class CityView {
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
     const bridges = new Graphics();
     const deckList: { span: [{ gx: number; gy: number }, { gx: number; gy: number }]; deck: ReturnType<typeof cityBridgeDeck> }[] = [];
+    // One deck per unordered island pair, at the wider direction's
+    // width; each direction still gets its own chevron later.
+    const pairs = new Map<string, { count: number; dirs: CityLayout["bridges"] }>();
     for (const br of this.layout.bridges) {
+      const key = [br.from, br.to].sort().join("|");
+      const pair = pairs.get(key) ?? { count: 0, dirs: [] };
+      pair.count = Math.max(pair.count, br.count);
+      pair.dirs.push(br);
+      pairs.set(key, pair);
+    }
+    for (const pair of pairs.values()) {
+      const br = pair.dirs[0];
       const a = byId.get(br.from);
       const b = byId.get(br.to);
       if (!a || !b) continue;
@@ -218,7 +229,7 @@ export class CityView {
         { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
       );
       if (!span) continue;
-      const deck = cityBridgeDeck(span, br.count);
+      const deck = cityBridgeDeck(span, pair.count);
       const P = (gx: number, gy: number, z = 0): [number, number] => {
         const [x, y] = proj.project(gx, gy);
         return [x, y - z * TW];
@@ -277,24 +288,11 @@ export class CityView {
         }
         bridges.stroke({ color: 0xd9c08c, width: Math.max(1, TW / 80) });
       }
-      deckList.push({ span, deck });
+      for (const dir of pair.dirs) {
+        deckList.push({ span: dir.from === br.from ? span : [span[1], span[0]], deck });
+      }
     }
     root.addChild(bridges);
-    // Direction chevrons in a second pass over every deck: a
-    // two-way import draws two decks on the same span, and neither
-    // direction may paint over the other's arrow.
-    const chevrons = new Graphics();
-    for (const { span, deck } of deckList) {
-      const ch = bridgeChevron(span, deck);
-      const tip = proj.project(ch.tip.gx, ch.tip.gy);
-      const wa = proj.project(ch.wingA.gx, ch.wingA.gy);
-      const wb = proj.project(ch.wingB.gx, ch.wingB.gy);
-      chevrons.moveTo(wa[0], wa[1]);
-      chevrons.lineTo(tip[0], tip[1]);
-      chevrons.lineTo(wb[0], wb[1]);
-    }
-    chevrons.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
-    root.addChild(chevrons);
 
     // buildings, one sprite per file, placed by its plate footprint
     for (const b of this.layout.buildings) {
@@ -323,6 +321,21 @@ export class CityView {
     }
 
     items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
+
+    // Direction chevrons last among the static layers, so a
+    // shoreline arrow is not buried under the island it points at.
+    const chevrons = new Graphics();
+    for (const { span, deck } of deckList) {
+      const ch = bridgeChevron(span, deck);
+      const tip = proj.project(ch.tip.gx, ch.tip.gy);
+      const wa = proj.project(ch.wingA.gx, ch.wingA.gy);
+      const wb = proj.project(ch.wingB.gx, ch.wingB.gy);
+      chevrons.moveTo(wa[0], wa[1]);
+      chevrons.lineTo(tip[0], tip[1]);
+      chevrons.lineTo(wb[0], wb[1]);
+    }
+    chevrons.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
+    root.addChild(chevrons);
 
     // island labels
     for (const isl of this.layout.islands) {
