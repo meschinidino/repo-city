@@ -213,15 +213,19 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
         // macOS); strip the canonical session root, not the raw one.
         let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
         let mut lines = BufReader::new(stdout).lines();
-        let mut saw_finish = false;
+        let mut finish_state: Option<&'static str> = None;
         while let Ok(Some(line)) = lines.next_line().await {
             let t = crate::adapters::claude::translate_line(&line);
             if let Some(cli_id) = &t.cli_session_id {
                 let _ = state.store.set_cli_session_id(&session_id, cli_id);
             }
             for payload in t.events {
-                if matches!(payload, EventPayload::SessionFinished { .. }) {
-                    saw_finish = true;
+                if let EventPayload::SessionFinished { outcome, .. } = &payload {
+                    finish_state = Some(match outcome {
+                        Outcome::Completed => "finished",
+                        Outcome::Failed => "failed",
+                        Outcome::Stopped => "stopped",
+                    });
                 }
                 // CLI paths arrive absolute; the watcher (ground
                 // truth) speaks repo-relative. Normalize CLI paths to
@@ -240,7 +244,7 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
             }
         }
         let status = child.wait().await;
-        if !saw_finish {
+        if finish_state.is_none() {
             let ok = status.map(|s| s.success()).unwrap_or(false);
             let _ = state.emit(
                 &session_id,
@@ -261,8 +265,8 @@ fn spawn_claude(state: Arc<AppState>, session_id: String, cwd: PathBuf, task: St
             let _ = state
                 .store
                 .set_state(&session_id, if ok { "finished" } else { "failed" });
-        } else {
-            let _ = state.store.set_state(&session_id, "finished");
+        } else if let Some(state_name) = finish_state {
+            let _ = state.store.set_state(&session_id, state_name);
         }
     });
 }
