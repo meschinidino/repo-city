@@ -57,7 +57,7 @@ Approach B plus a plan layer: requested features appear as translucent buildings
 
 Approach B, because the anti-dashboard rule and the lightweight-AAA premise are both existential. C's preview idea is explicitly out of submission scope. TypeScript/JavaScript first, plus Python for single-package repos (amended 2026-10-26, see the amendment under Committed Contracts). One coding-agent CLI adapter first. Llama for district naming, narration, and diff-to-English reports, which is also the Meta AI tooling surface.
 
-Open rule check before committing the agent runtime: confirm what counts for "Use of Meta AI tooling" and whether the coding agent itself must run on a Meta model. That answer decides OpenHands/Llama versus a stronger model for edits with Llama on the city layer.
+Rule check done (2026-10-26, T1): the Official Rules were accepted in the portal and Discord #office-hours was asked what counts for "Use of Meta AI tooling". The runtime proceeds with the approved fallback split under Committed Contracts (a stronger coding model or existing CLI edits code; Llama runs naming, narration, and reports) unless the office-hours answer requires otherwise. The write-up is owed in `docs/meta-tooling-rule.md`.
 
 Visual direction was settled on 2026-10-26 after a moodboard round; see the next section. The three first-round mockups (Factorio Dusk, Clean SimCity, Night Grid, in ~/.gstack/projects/meta-hackathon/designs/mockup-20261026/) stay rejected.
 
@@ -83,8 +83,8 @@ The map is a **low-poly quest archipelago**. DESIGN.md is the source of truth; t
 
 ## Open Questions
 
-- What exactly does "Use of Meta AI tooling" require, and can the code-editing agent run on a non-Meta model while Llama runs the city intelligence?
-- Which agent runtime: OpenHands headless, an existing coding-agent CLI per session, or a minimal tool-calling loop? Decided by the rule check above plus a day-1 spike.
+- ~~What exactly does "Use of Meta AI tooling" require, and can the code-editing agent run on a non-Meta model while Llama runs the city intelligence?~~ Asked in Discord #office-hours on 2026-10-26 (T1 done); the approved runtime fallback split under Committed Contracts governs until the answer lands. Write-up owed in `docs/meta-tooling-rule.md`.
+- ~~Which agent runtime: OpenHands headless, an existing coding-agent CLI per session, or a minimal tool-calling loop?~~ Decided: an existing coding-agent CLI per session (Claude Code primary, Codex fallback; see Event pipeline and limits), subject to the day-1 spike pass thresholds.
 - Visual direction: decided 2026-10-26 (quest archipelago, see Visual Direction and DESIGN.md). Still open: the command bar and report card visuals, and whether Muse gets a role beyond the Llama naming and reports.
 - How are districts defined on a messy repo with weak folder structure: directories, import-graph communities (Louvain), or a hybrid? Needs a test on a real repo (GestiKo).
 
@@ -100,7 +100,7 @@ Public GitHub repo (a submission requirement), local browser app run from the re
 
 ## Next Steps
 
-1. Rule check on Meta AI tooling, then a day-1 spike: repo to import graph to districts on a real repo (GestiKo; TypeScript first, Python added per the 2026-10-26 amendment).
+1. ~~Rule check on Meta AI tooling~~ (done 2026-10-26, T1), ~~then a day-1 spike: repo to import graph to districts on a real repo~~ (done: T2/T13, extraction on GestiKo). Next is the live loop below.
 2. Live loop on a fixed layout: agent file events move the worker, scaffolding on the active building, English report on finish.
 3. Session CRUD on the map (create, inspect, pause/stop, delete/archive), one worktree per session, plus the one real drag-connect dispatch.
 4. Visual direction is decided (quest archipelago, DESIGN.md); next is building the sprite pipeline into the Pixi client and mocking the command bar and report card, then polish. No Approach C footprint work in the submission scope.
