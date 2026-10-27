@@ -119,6 +119,55 @@ export function layoutCity(extraction: Extraction): CityLayout {
   };
 }
 
+export interface GridRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The water-only span of a bridge between two island rectangles
+ * (grid cells): the centre-to-centre line clipped out of both
+ * islands, so a bridge starts and ends at a shoreline instead of
+ * crossing the land it connects. Returns null when the rectangles
+ * overlap along the line (no water between them to draw on).
+ */
+export function bridgeSpan(a: GridRect, b: GridRect): [{ gx: number; gy: number }, { gx: number; gy: number }] | null {
+  const ax = a.x + a.w / 2;
+  const ay = a.y + a.h / 2;
+  const dx = b.x + b.w / 2 - ax;
+  const dy = b.y + b.h / 2 - ay;
+  const inside = (r: GridRect): [number, number] => {
+    let t0 = -Infinity;
+    let t1 = Infinity;
+    if (dx === 0) {
+      if (ax < r.x || ax > r.x + r.w) return [1, 0];
+    } else {
+      const ta = (r.x - ax) / dx;
+      const tb = (r.x + r.w - ax) / dx;
+      t0 = Math.max(t0, Math.min(ta, tb));
+      t1 = Math.min(t1, Math.max(ta, tb));
+    }
+    if (dy === 0) {
+      if (ay < r.y || ay > r.y + r.h) return [1, 0];
+    } else {
+      const ta = (r.y - ay) / dy;
+      const tb = (r.y + r.h - ay) / dy;
+      t0 = Math.max(t0, Math.min(ta, tb));
+      t1 = Math.min(t1, Math.max(ta, tb));
+    }
+    return [t0, t1];
+  };
+  const exitA = inside(a)[1];
+  const enterB = inside(b)[0];
+  if (!(exitA < enterB)) return null;
+  return [
+    { gx: ax + dx * exitA, gy: ay + dy * exitA },
+    { gx: ax + dx * enterB, gy: ay + dy * enterB },
+  ];
+}
+
 /** Isometric projection for a city of any size (same math as the test map). */
 export function cityProjector(layout: { cols: number; rows: number }, TW: number) {
   const TH = TW / 2;
