@@ -14,8 +14,14 @@ export function pixelsToCanvas(p: PixelData): HTMLCanvasElement {
   ctx.putImageData(new ImageData(new Uint8ClampedArray(p.data), p.width, p.height), 0, 0);
   return c;
 }
+const textureCache = new WeakMap<PixelData, Texture>();
 function tex(p: PixelData): Texture {
-  return Texture.from(pixelsToCanvas(p));
+  let cached = textureCache.get(p);
+  if (!cached) {
+    cached = Texture.from(pixelsToCanvas(p));
+    textureCache.set(p, cached);
+  }
+  return cached;
 }
 function poly(g: Graphics, pts: [number, number][], fill: number, alpha = 1) {
   g.moveTo(pts[0][0], pts[0][1]);
