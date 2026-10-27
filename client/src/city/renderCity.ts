@@ -202,15 +202,16 @@ export class CityView {
     }
     root.addChild(shore);
 
-    // Bridges are decks, not lines: the same code-drawn bridge as
-    // the test map (side face, plank seams, posts, rope rails),
-    // generalised to a diagonal shore-to-shore span. A lane-gold
-    // chevron near the far end points along the import direction.
+    // Bridges at city scale are shore-to-shore strokes (PR #12),
+    // one per unordered island pair at the wider direction's width,
+    // with a lane-gold chevron per direction drawn later. Full deck
+    // bridges (the test map's) were tried in this PR and reverted
+    // by owner call: 381 decks carpeted the sea and the archipelago
+    // stopped reading as islands in open water. Deck treatment at
+    // island zoom is a step-4 (T12) zoom-semantics question.
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
     const bridges = new Graphics();
     const deckList: { span: [{ gx: number; gy: number }, { gx: number; gy: number }]; deck: ReturnType<typeof cityBridgeDeck> }[] = [];
-    // One deck per unordered island pair, at the wider direction's
-    // width; each direction still gets its own chevron later.
     const pairs = new Map<string, { count: number; dirs: CityLayout["bridges"] }>();
     for (const br of this.layout.bridges) {
       const key = [br.from, br.to].sort().join("|");
@@ -230,66 +231,11 @@ export class CityView {
       );
       if (!span) continue;
       const deck = cityBridgeDeck(span, pair.count);
-      const P = (gx: number, gy: number, z = 0): [number, number] => {
-        const [x, y] = proj.project(gx, gy);
-        return [x, y - z * TW];
-      };
-      const at = (t: number, v: number, z = 0): [number, number] =>
-        P(
-          deck.a.gx + (deck.b.gx - deck.a.gx) * t + deck.perp.gx * v,
-          deck.a.gy + (deck.b.gy - deck.a.gy) * t + deck.perp.gy * v,
-          z,
-        );
-      const c = deck.corners.map((pt) => P(pt.gx, pt.gy));
-      // side face on whichever edge faces the viewer (lower on screen)
-      const front = (c[2][1] + c[3][1]) / 2 > (c[0][1] + c[1][1]) / 2 ? [c[3], c[2]] : [c[1], c[0]];
-      bridges.poly([front[0][0], front[0][1], front[1][0], front[1][1], front[1][0], front[1][1] + TW * 0.1, front[0][0], front[0][1] + TW * 0.1]);
-      bridges.fill({ color: 0x7a5432 });
-      // posts below the deck edges
-      for (let s = 0.5; s < deck.len; s += 1) {
-        for (const v of [-1, 1]) {
-          const p = at(s / deck.len, v);
-          bridges.moveTo(p[0], p[1]);
-          bridges.lineTo(p[0], p[1] + TW * 0.22);
-        }
-      }
-      bridges.stroke({ color: 0x5b3e25, width: Math.max(1, TW * 0.03) });
-      // deck top and plank seams
-      bridges.poly([...c[0], ...c[1], ...c[2], ...c[3]]);
-      bridges.fill({ color: 0xb98652 });
-      for (let s = 0.12; s < deck.len; s += 0.24) {
-        const p = at(s / deck.len, -1);
-        const q2 = at(s / deck.len, 1);
-        bridges.moveTo(p[0], p[1]);
-        bridges.lineTo(q2[0], q2[1]);
-      }
-      bridges.stroke({ color: 0x5a3c1e, alpha: 0.5, width: Math.max(1, TW / 90) });
-      // rope rails: posts up, sagging rope between them. The post
-      // spacing divides the span evenly so the last post lands on
-      // the far shore instead of hanging mid-sag.
-      const railSteps = Math.max(1, Math.round(deck.len / 0.7));
-      const railStep = deck.len / railSteps;
-      for (const v of [-1, 1]) {
-        for (let i = 0; i <= railSteps; i++) {
-          const p = at(i / railSteps, v);
-          const q2 = at(i / railSteps, v, 0.11);
-          bridges.moveTo(p[0], p[1]);
-          bridges.lineTo(q2[0], q2[1]);
-        }
-        bridges.stroke({ color: 0x5b3e25, width: Math.max(1, TW * 0.022) });
-        let first = true;
-        for (let s = 0; s <= deck.len + 1e-6; s += 0.07) {
-          const sag = 0.025 * Math.sin(((s % railStep) / railStep) * Math.PI);
-          const p = at(Math.min(1, s / deck.len), v, 0.1 - sag);
-          if (first) {
-            bridges.moveTo(p[0], p[1]);
-            first = false;
-          } else bridges.lineTo(p[0], p[1]);
-        }
-        const end = at(1, v, 0.1);
-        bridges.lineTo(end[0], end[1]);
-        bridges.stroke({ color: 0xd9c08c, width: Math.max(1, TW / 80) });
-      }
+      const [ax, ay] = proj.project(span[0].gx, span[0].gy);
+      const [bx, by] = proj.project(span[1].gx, span[1].gy);
+      bridges.moveTo(ax, ay);
+      bridges.lineTo(bx, by);
+      bridges.stroke({ color: 0xb98652, alpha: 0.55, width: Math.min(6, 1.5 + Math.log2(pair.count + 1)) });
       for (const dir of pair.dirs) {
         deckList.push({ span: dir.from === br.from ? span : [span[1], span[0]], deck });
       }
