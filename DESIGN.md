@@ -158,7 +158,7 @@ Island identity comes from landmarks, roofs, banners and labels, never from tint
 - **Report card:** opens next to the island it belongs to, with a fine leader line to the island. It holds the English report and Accept / Discard / Keep for later.
 - **Radial menu** around a clicked island or building for editing actions (from Mini Motorways), never a panel.
 - Hackathon scope: one map, up to about 2,000 files, at most 3 agents.
-- Status: the command bar, quest log and report card are specified here but not mocked yet; the concept art (link above) shows the bar only.
+- Status: the command bar, quest log and report card are specified here. Three mock variants were made on 2026-10-27; the owner approved variant A, "Harbor bar" (record: `specs/step4-plan.md`). Not built yet; T12 builds it.
 
 ## Elevation & Depth
 

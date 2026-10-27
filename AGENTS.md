@@ -50,7 +50,9 @@ Never cut: real event mapping, the finish flow, failure states, English reports,
 ## Commands
 
 - Sprite pipeline prototype: `python3 -m http.server 8000` from the repo root, then open `http://localhost:8000/prototype/sprite-spike/`. The checks table at the top recomputes on every load.
-- No build or test commands exist yet; T10 adds a one-command run.
+- Server tests: `export PATH="$HOME/.cargo/bin:$PATH"; cd server && cargo test` and `cargo clippy --all-targets -- -D warnings`.
+- Client tests: `npm --prefix client test`, `cd client && ./node_modules/.bin/tsc --noEmit`, and `npm --prefix client run test:e2e` for Playwright. Check port 5173 for a stale Vite server before E2E.
+- A one-command run from a clean clone does not exist yet; T10 adds it.
 
 ## Git
 

@@ -77,9 +77,14 @@ Test stack (approved): cargo test (Rust), Vitest (client logic), Playwright (the
 - If something from the backend or environment is missing, stop and report it as a blocker: what is missing and what the user must do.
 - Separate "tested with simulation" from "tested end to end" in every report.
 
+## Updates (2026-10-27)
+
+- GestiKo counts moved: 600 files, 60 islands, 381 bridges since the parent-remainder split (PR #13). Older counts in the 2026-10-26 entries are history, not current numbers.
+- Command bar, quest log and report card are mocked. The owner approved variant A, "Harbor bar". T12 builds it. T5 (session lifecycle) is done (PR #15).
+
 ## Open questions carried in the design doc
 
 - Exact Meta AI tooling requirement (gate 1 answers this).
-- Command bar, quest log and report card visuals (direction decided, not mocked yet).
+- Command bar, quest log and report card visuals. Mocked; variant A "Harbor bar" approved by the owner on 2026-10-27. Build is T12.
 - Whether Louvain refinement passes the naming test (day-1 spike).
 - Demo-repo test-command source if none of `package.json`/justfile/Makefile exists (shows as "not run" per D15).
