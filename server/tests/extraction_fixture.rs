@@ -269,6 +269,54 @@ fn workspace_repo_keeps_files_outside_packages() {
 }
 
 #[test]
+fn codex_regressions_nested_python_from_import_and_js_extension() {
+    let dir = std::env::temp_dir().join(format!("repo-city-codex-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("pkg")).expect("mkdir");
+    std::fs::write(
+        dir.join("pkg/service.py"),
+        "def run():\n    return 1\n",
+    )
+    .expect("write service");
+    std::fs::write(
+        dir.join("pkg/__init__.py"),
+        "from . import service\n\ndef load():\n    import missing_nested_xyz\n    return service\n",
+    )
+    .expect("write init");
+    std::fs::write(dir.join("a.ts"), "import { s } from './service.js';\nexport const a = s;\n")
+        .expect("write a");
+    std::fs::write(dir.join("service.ts"), "export const s = 1;\n").expect("write service ts");
+    let extraction = extract_repo(&dir).expect("extract codex regression repo");
+    // __init__: 1 resolved (service submodule); nested import counts as unresolved.
+    let init = file(&extraction, "pkg/__init__.py");
+    assert_eq!(init.import_count, 2);
+    assert!(
+        extraction.unresolved.iter().any(|u| u.specifier == "missing_nested_xyz"),
+        "nested python import must be counted: {:?}",
+        extraction.unresolved
+    );
+    assert_eq!(
+        file(&extraction, "pkg/service.py").importer_count,
+        1,
+        "from . import service must count service.py as imported"
+    );
+    let a = file(&extraction, "a.ts");
+    assert_eq!(a.import_count, 1);
+    assert!(
+        extraction.bridges.iter().flat_map(|b| &b.edges).any(|e| e.to_file == "service.ts")
+            || extraction.files.iter().find(|f| f.path == "service.ts").is_some_and(|f| f.importer_count == 1),
+        "./service.js must resolve to service.ts"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn missing_root_is_an_error_not_an_empty_extraction() {
+    let dir = std::env::temp_dir().join("repo-city-definitely-missing-xyz");
+    assert!(extract_repo(&dir).is_err());
+}
+
+#[test]
 fn empty_repo_yields_zero_counts_not_a_panic() {
     let dir = std::env::temp_dir().join(format!("repo-city-empty-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");

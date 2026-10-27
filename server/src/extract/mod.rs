@@ -132,13 +132,21 @@ struct IslandDef {
     entry_files: HashSet<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+struct ImportSpec {
+    text: String,
+    /// Resolution candidates in order (Python `from` imports try
+    /// submodule candidates before the base module).
+    candidates: Vec<String>,
+}
+
 #[derive(Debug)]
 struct RawFile {
     abs_path: PathBuf,
     rel_path: String,
     island_idx: usize,
     source: String,
-    specifiers: Vec<String>,
+    specifiers: Vec<ImportSpec>,
     parse_error: Option<String>,
 }
 
@@ -168,8 +176,23 @@ fn rel_posix(root: &Path, path: &Path) -> String {
 
 fn collect_source_files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        // Never follow symlinked directories and never scan the same
+        // canonical directory twice: a symlink cycle must not loop the
+        // extractor or scan content outside the repo.
+        if dir
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            continue;
+        }
+        if let Ok(canon) = dir.canonicalize() {
+            if !visited.insert(canon) {
+                continue;
+            }
+        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -405,12 +428,27 @@ fn discover_islands(root: &Path, files: &[PathBuf]) -> Vec<IslandDef> {
             _ => {}
         }
     }
+    // Root package entry points apply to whichever island owns the file
+    // (single-package repos declare their entry at the repo root).
+    let root_entry_files: HashSet<PathBuf> = read_package_json(root)
+        .map(|pkg| package_entry_files(root, &pkg))
+        .unwrap_or_default();
     for (name, dir) in by_dir {
-        let entry_files = read_package_json(&dir)
+        let mut entry_files = read_package_json(&dir)
             .map(|pkg| package_entry_files(&dir, &pkg))
             .unwrap_or_default();
+        for entry in &root_entry_files {
+            if entry.starts_with(&dir) {
+                entry_files.insert(entry.clone());
+            }
+        }
+        let id = if islands.iter().any(|i| i.id == name) {
+            format!("dir:{name}")
+        } else {
+            name.clone()
+        };
         islands.push(IslandDef {
-            id: name.clone(),
+            id,
             name,
             rel_path: rel_posix(root, &dir),
             abs_path: dir,
@@ -444,34 +482,59 @@ fn island_index_for(islands: &[IslandDef], file: &Path) -> Option<usize> {
     best.map(|(idx, _)| idx)
 }
 
-fn parse_python_imports(source: &str) -> (Vec<String>, Option<String>) {
-    let suite = match <rustpython_parser::ast::Suite as rustpython_parser::Parse>::parse(
-        source, "<module>",
-    ) {
+fn parse_python_imports(source: &str) -> (Vec<ImportSpec>, Option<String>) {
+    use rustpython_ast::Visitor;
+    use rustpython_parser::ast::{StmtImport, StmtImportFrom, Suite};
+    #[derive(Default)]
+    struct Collector {
+        specs: Vec<ImportSpec>,
+    }
+    impl Visitor for Collector {
+        fn visit_stmt_import(&mut self, node: StmtImport) {
+            for alias in &node.names {
+                let text = alias.name.as_str().to_string();
+                self.specs.push(ImportSpec {
+                    candidates: vec![text.clone()],
+                    text,
+                });
+            }
+        }
+        fn visit_stmt_import_from(&mut self, node: StmtImportFrom) {
+            let level = node.level.as_ref().map(|v| v.to_usize()).unwrap_or(0);
+            let dots = ".".repeat(level);
+            let module = node.module.as_ref().map(|m| m.as_str()).unwrap_or("");
+            let base = format!("{dots}{module}");
+            let mut candidates: Vec<String> = node
+                .names
+                .iter()
+                .map(|alias| {
+                    let name = alias.name.as_str();
+                    if module.is_empty() {
+                        format!("{dots}{name}")
+                    } else {
+                        format!("{base}.{name}")
+                    }
+                })
+                .collect();
+            candidates.push(base.clone());
+            self.specs.push(ImportSpec {
+                text: base,
+                candidates,
+            });
+        }
+    }
+    let suite = match <Suite as rustpython_parser::Parse>::parse(source, "<module>") {
         Ok(suite) => suite,
         Err(err) => return (Vec::new(), Some(err.to_string())),
     };
-    let mut specifiers = Vec::new();
-    for stmt in &suite {
-        match stmt {
-            rustpython_parser::ast::Stmt::Import(import) => {
-                for alias in &import.names {
-                    specifiers.push(alias.name.as_str().to_string());
-                }
-            }
-            rustpython_parser::ast::Stmt::ImportFrom(import) => {
-                let level = import.level.as_ref().map(|v| v.to_usize()).unwrap_or(0);
-                let dots = ".".repeat(level);
-                let module = import.module.as_ref().map(|m| m.as_str()).unwrap_or("");
-                specifiers.push(format!("{dots}{module}"));
-            }
-            _ => {}
-        }
+    let mut collector = Collector::default();
+    for stmt in suite {
+        collector.visit_stmt(stmt);
     }
-    (specifiers, None)
+    (collector.specs, None)
 }
 
-fn parse_imports(path: &Path, source: &str) -> (Vec<String>, Option<String>) {
+fn parse_imports(path: &Path, source: &str) -> (Vec<ImportSpec>, Option<String>) {
     if path
         .extension()
         .and_then(|e| e.to_str())
@@ -497,7 +560,10 @@ fn parse_imports(path: &Path, source: &str) -> (Vec<String>, Option<String>) {
         };
         if let Some(value) = specifier {
             if let Some(s) = value.as_str() {
-                specifiers.push(s.to_string());
+                specifiers.push(ImportSpec {
+                    text: s.to_string(),
+                    candidates: vec![s.to_string()],
+                });
             }
         }
     }
@@ -690,6 +756,12 @@ fn resolve_python_target(
 /// `oxc_resolver` resolves it to a file; only resolved targets inside the
 /// scanned file set become import edges / bridges.
 pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
+    if !root.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("repo root is not a directory: {}", root.display()),
+        ));
+    }
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let files_on_disk = collect_source_files(&root);
     let islands_def = discover_islands(&root, &files_on_disk);
@@ -741,6 +813,24 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
             "default".into(),
         ],
         main_fields: vec!["main".into(), "module".into(), "types".into()],
+        extension_alias: vec![
+            (
+                ".js".to_string(),
+                vec![".ts".to_string(), ".tsx".to_string(), ".js".to_string()],
+            ),
+            (
+                ".jsx".to_string(),
+                vec![".tsx".to_string(), ".jsx".to_string()],
+            ),
+            (
+                ".mjs".to_string(),
+                vec![".mts".to_string(), ".mjs".to_string()],
+            ),
+            (
+                ".cjs".to_string(),
+                vec![".cts".to_string(), ".cjs".to_string()],
+            ),
+        ],
         tsconfig: Some(TsconfigDiscovery::Auto),
         ..ResolveOptions::default()
     });
@@ -762,24 +852,28 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| e.eq_ignore_ascii_case("py"))
             {
-                match resolve_python_target(&file.abs_path, specifier, &by_canon) {
+                match specifier
+                    .candidates
+                    .iter()
+                    .find_map(|c| resolve_python_target(&file.abs_path, c, &by_canon))
+                {
                     Some(target_idx) => {
                         resolved_imports += 1;
                         importer_counts[target_idx] += 1;
                         edges.push(Edge {
                             from_file: file.rel_path.clone(),
                             to_file: raw_files[target_idx].rel_path.clone(),
-                            specifier: specifier.clone(),
+                            specifier: specifier.text.clone(),
                         });
                     }
                     None => unresolved.push(UnresolvedImport {
                         from_file: file.rel_path.clone(),
-                        specifier: specifier.clone(),
+                        specifier: specifier.text.clone(),
                     }),
                 }
                 continue;
             }
-            match resolver.resolve_file(&file.abs_path, specifier) {
+            match resolver.resolve_file(&file.abs_path, &specifier.text) {
                 Ok(resolution) => {
                     resolved_imports += 1;
                     let resolved_path = resolution.path();
@@ -793,14 +887,14 @@ pub fn extract_repo(root: &Path) -> std::io::Result<Extraction> {
                         edges.push(Edge {
                             from_file: file.rel_path.clone(),
                             to_file: raw_files[target_idx].rel_path.clone(),
-                            specifier: specifier.clone(),
+                            specifier: specifier.text.clone(),
                         });
                     }
                 }
                 Err(_) => {
                     unresolved.push(UnresolvedImport {
                         from_file: file.rel_path.clone(),
-                        specifier: specifier.clone(),
+                        specifier: specifier.text.clone(),
                     });
                 }
             }
@@ -972,6 +1066,7 @@ mod tests {
             "import a from './a';\nexport * from './b';\nexport { c } from './c';\nexport const d = 1;\n",
         );
         assert!(err.is_none());
-        assert_eq!(specs, vec!["./a", "./b", "./c"]);
+        let texts: Vec<&str> = specs.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, vec!["./a", "./b", "./c"]);
     }
 }
