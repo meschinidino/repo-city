@@ -1,7 +1,6 @@
-import { buildWorld, type SheetPixels } from "./map/pipeline";
+import { buildWorld, renderGateFailures, type SheetPixels } from "./map/pipeline";
 import { renderWorld } from "./map/renderPixi";
 import type { PixelData } from "./map/pixels";
-import { usedSprites } from "./map/pipeline";
 import { occlusion } from "./map/placement";
 import { PASS } from "./map/checks";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -32,19 +31,8 @@ async function main() {
   const world = buildWorld(sheets);
 
   // Fail-level geometry checks from DESIGN.md: a failing check stops the render, naming the check.
-  const used = usedSprites(world);
-  const failures: string[] = [];
-  const count = world.buildings.count + world.coast.count + world.shipComp.count + world.marketTrees.count;
-  if (count !== 36) failures.push(`sprites found (${count}/36)`);
-  if (world.buildings.touching + world.coast.touching + world.shipComp.touching + world.marketTrees.touching !== 0) failures.push("sprites cropped at sheet edge");
-  if (Math.max(...used.map((s) => s.aspectErrorPct ?? Infinity)) >= PASS.plateShapePct) failures.push("plate shape vs footprint");
-  if (Math.max(...used.map((s) => s.overhangPct ?? Infinity)) >= PASS.baseOutsidePct) failures.push("base outside footprint");
+  const failures = renderGateFailures(world);
   const edge = Math.max(...world.tiles.map((t) => t.err));
-  if (edge >= PASS.tileEdgePct) failures.push(`tile edge error ${edge.toFixed(2)}%`);
-  if (Math.max(...world.tiles.map((t) => t.gap)) >= PASS.tileGapPct) failures.push("gaps inside tile top face");
-  if (world.layout.overlaps || world.layout.offLand || world.layout.onRoad) failures.push("footprint overlap/off-land/bridge landing");
-  if (world.layout.crowd !== 0) failures.push("building without one free cell");
-  if (world.layout.treeOnFoot || world.layout.treeFront) failures.push("tree placement");
   if ((occlusion(world)[0]?.pct ?? 0) >= PASS.hiddenPct) failures.push("building hidden by others");
 
   if (failures.length) {
