@@ -4,10 +4,22 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ## [0.2.0] - 2026-10-26
 
-Roadmap step 2, task T2: the Oxc extraction spike. First application code.
-Tested with a stand-in fixture only; the real demo repo is not available yet.
+Scope amendment (2026-10-26): single-package repos and Python extraction. The available real repo (GestiKo) is one TS frontend package plus a Python backend in a single repo, not a TS monorepo; without this change it produced one island and no bridges and there was no real repo for the demo. Recorded as an amendment in `specs/design.md` and task T13 in `specs/tasks.jsonl`; `ROADMAP.md`, `AGENTS.md` and `notes/working-notes.md` updated to match. Go extraction deferred to the end of the hackathon only if time remains; multi-repo stays out of scope. T13 implemented: Python import extraction (`rustpython-parser`) and single-package feature/module districts in `server/src/extract/`, with a hand-counted single-package fixture (9 files, 8 imports, 6 resolved, 2 unresolved) in `server/tests/`. Real-repo run on GestiKo: 600 files, 43 islands, 232 bridges, 0 parse errors.
 
-### Added
+T11: sprite pipeline ported from the prototype into the client.
+
+### Added — client (T11)
+- `client/`: Vite + TypeScript + PixiJS client scaffold (Vitest for tests). Run it with `npm --prefix client run dev`; `?full=1` renders at 200 px per tile.
+- `client/src/map/`: the pipeline as small pure functions — magenta and cyan keying, cut-out by connected shape, plate measurement and footprint choice, tile fitting, coast autotiling, occupancy layout with trees, code-drawn bridges and lanes — plus the Pixi renderer for the same three-island test map. Sheets load from `assets/sprites/`.
+- `client/src/map/pipeline.test.ts`: every check from the prototype's checks table as a Vitest test against the committed sheets, at the pass levels in `DESIGN.md`. The same fail-level checks gate the render at load in the client.
+- `client/e2e/smoke.spec.ts`: first Playwright E2E smoke (run with `npm --prefix client run test:e2e`, browser via `test:e2e:install`). It starts the Vite dev server itself, asserts the fail-level checks pass in the page, the three islands (api, auth, payments; 17 buildings, 15 trees) render with real sea/grass/sail pixels in the screenshot, no console errors, and the `?full=1` canvas is exactly 4200×2440 (200 px per tile). The five user journeys in `specs/test-plan.md` remain unimplemented until the session features they drive exist.
+
+### Changed
+- Tile fitting now straightens tile edges after the affine warp (per-column shift by the smoothed residual to the exact diamond). Measured on the committed sheets: the prototype's pre-fit edge error reproduces at 1.394% of tile width; the fitted tiles measure 0.25% worst, under the 1% target in `DESIGN.md`. Both numbers print in the test run.
+
+Roadmap step 2, task T2: the Oxc extraction spike. First application code, tested first with a stand-in fixture; T13 (scope amendment above) later ran extraction on the real repo.
+
+### Added — server (T2)
 - `server/`: Cargo project (`repo-city-server`) with the extraction library in `server/src/extract/` and a `repo-city-extract` CLI. It scans a TS/JS repo with `oxc_parser` / `oxc_resolver` and outputs a client-readable JSON summary (`schema_version` 1): directory-first islands (workspace packages, or top-level directories without a workspace), import bridges counted per island pair, per-file roles/building types from DESIGN.md (keep, sea gate, silos, lighthouse, market, containers, ruin, cottage), and parsed/resolved/unresolved import counts with unresolved specifiers and parse errors listed.
 - `server/tests/fixtures/sample-monorepo/`: small stand-in TS monorepo fixture (4 packages, 12 files), labeled a stand-in in its README, in test names, and in the JSON output (`is_stand_in_fixture`). Hand-counted expectations: 16 imports, 14 resolved, 2 unresolved, bridges api->shared 3, web->shared 3, cli->shared 1, cli->api 1.
 - `server/tests/extraction_fixture.rs` plus unit tests: `cargo test` checks the counts, islands, bridges, roles, JSON shape, the directory-first fallback, and the empty-repo case (11 tests). `cargo clippy --all-targets -- -D warnings` is clean.
@@ -17,7 +29,7 @@ Tested with a stand-in fixture only; the real demo repo is not available yet.
 - `VERSION` bumped to 0.2.0.
 
 ### Known gaps
-- Not yet run against the real demo repo: workspace glob shapes beyond `packages/*`, external `node_modules` dependencies, dynamic `import()`, and scale (~2,000 files) are unmeasured.
+- Workspace glob shapes beyond `packages/*`, external `node_modules` dependencies, dynamic `import()`, and scale (~2,000 files) remain unmeasured (T13 measured GestiKo at 600 files).
 - No Axum server yet; adapters (T3) and the permission bridge (T8) still wait for the T1 rule check.
 
 ## [0.1.3] - 2026-10-26

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Repo City — sprite pipeline (T11)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Overpass:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <style>
+      html, body { margin: 0; background: #13262b; color: #eaf2f0; font-family: "Overpass", system-ui, sans-serif; }
+      #app canvas { display: block; }
+      #status { position: fixed; left: 12px; bottom: 12px; background: rgba(19,38,43,.92); padding: 8px 12px; border-radius: 10px; font-size: 13px; max-width: 90vw; }
+      #status.fail { outline: 2px solid #d4402b; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="status">Loading sprite sheets…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
