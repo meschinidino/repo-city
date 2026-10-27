@@ -212,9 +212,18 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/report", get(session_report))
         .route("/api/sessions/{id}/stop", post(stop_session))
         .route("/ws", get(ws_handler))
-        // Local single-user tool: the Vite dev client (another
-        // origin) must be able to call this API from the browser.
-        .layer(tower_http::cors::CorsLayer::permissive())
+        // Local single-user tool: only the Vite dev client may call
+        // this API from a browser. A permissive layer would let any
+        // web page spawn agents in local repos.
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::AllowOrigin::list([
+                    "http://localhost:5173".parse().unwrap(),
+                    "http://127.0.0.1:5173".parse().unwrap(),
+                ]))
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
         .with_state(state)
 }
 

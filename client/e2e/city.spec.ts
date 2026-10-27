@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
-import { cpSync, appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, appendFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
  * proves the watcher/report path, not live-agent behavior.
  */
 
-const SERVER_PORT = 8799;
+const SERVER_PORT = 8800 + Math.floor(Math.random() * 400);
 const SERVER = `http://127.0.0.1:${SERVER_PORT}`;
 let serverProc: ChildProcess | undefined;
 let repoDir = "";
@@ -28,13 +28,17 @@ function git(args: string[]) {
 }
 
 test.beforeAll(async () => {
+  test.setTimeout(290_000);
   const serverDir = resolve(process.cwd(), "../server");
-  execSync("cargo build --bin repo-city-server-bin", {
-    cwd: serverDir,
-    env: { ...process.env, PATH: `${process.env.HOME}/.cargo/bin:${process.env.PATH}` },
-    stdio: "pipe",
-    timeout: 280_000,
-  });
+  const bin = join(serverDir, "target/debug/repo-city-server-bin");
+  if (!existsSync(bin)) {
+    execSync("cargo build --bin repo-city-server-bin", {
+      cwd: serverDir,
+      env: { ...process.env, PATH: `${process.env.HOME}/.cargo/bin:${process.env.PATH}` },
+      stdio: "pipe",
+      timeout: 280_000,
+    });
+  }
   workRoot = mkdtempSync(join(tmpdir(), "repo-city-e2e-"));
   repoDir = join(workRoot, "repo");
   cpSync(join(serverDir, "tests/fixtures/sample-monorepo"), repoDir, { recursive: true });
@@ -77,6 +81,17 @@ test("city gate journey (watcher-driven, no agent): islands, lit building, repor
     return c.view.litFiles.includes("packages/api/src/index.ts") && c.view.shipFile === "packages/api/src/index.ts";
   }, undefined, { timeout: 30_000 });
   await expect(page.locator("#status")).toContainText("ship at packages/api/src/index.ts");
+
+  // The drawing follows the state: the ship sprite ends up at the
+  // lit building's screen position, not just in the view model.
+  await page.waitForFunction(() => {
+    const c = (window as unknown as { __city: { city: { shipScreenPos(): [number, number]; fileScreenPos(f: string): [number, number] | null; shipVisible: boolean } } }).__city;
+    if (!c.city.shipVisible) return false;
+    const [sx, sy] = c.city.shipScreenPos();
+    const target = c.city.fileScreenPos("packages/api/src/index.ts");
+    if (!target) return false;
+    return Math.hypot(sx - target[0], sy - target[1]) < 180;
+  }, undefined, { timeout: 30_000 });
 
   await page.locator("#stop-report").click();
   await expect(page.locator("#report")).toContainText("template_from_diff");

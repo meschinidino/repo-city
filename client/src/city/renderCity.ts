@@ -24,9 +24,11 @@ export class CityView {
   private glow = new Graphics();
   private construction!: Sprite;
   private shipTarget: [number, number] | null = null;
+  private shipPlaced = false;
   private layout: CityLayout;
   private proj: ReturnType<typeof cityProjector>;
   private world: World;
+  private texCache = new Map<string, Texture | null>();
 
   constructor(world: World, layout: CityLayout) {
     this.world = world;
@@ -35,9 +37,26 @@ export class CityView {
   }
 
   private tex(key: string): Texture | null {
-    const sprite = this.world.sprites.find((s) => s.key === key) ?? this.world.sprites.find((s) => s.key === "cottage");
-    if (!sprite) return null;
-    return Texture.from(pixelsToCanvas(sprite));
+    if (!this.texCache.has(key)) {
+      const sprite = this.world.sprites.find((s) => s.key === key) ?? this.world.sprites.find((s) => s.key === "cottage");
+      this.texCache.set(key, sprite ? Texture.from(pixelsToCanvas(sprite)) : null);
+    }
+    return this.texCache.get(key) ?? null;
+  }
+
+  /** Screen position of a file's plot centre (for tests and labels). */
+  fileScreenPos(file: string): [number, number] | null {
+    const pos = this.layout.filePos.get(file);
+    if (!pos) return null;
+    return this.proj.project(pos.gx + PLOT / 2, pos.gy + PLOT / 2);
+  }
+
+  shipScreenPos(): [number, number] {
+    return [this.ship.position.x, this.ship.position.y];
+  }
+
+  get shipVisible(): boolean {
+    return this.ship.visible;
   }
 
   async init(): Promise<HTMLElement> {
@@ -110,7 +129,6 @@ export class CityView {
     }
 
     items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
-    root.addChild(bridges);
 
     // island labels
     for (const isl of this.layout.islands) {
@@ -137,6 +155,9 @@ export class CityView {
     // the session ship
     const shipTex = Texture.from(pixelsToCanvas(this.world.ship));
     this.ship = new Sprite(shipTex);
+    // No event has pointed anywhere yet: the ship is not drawn at
+    // an invented gate. It appears when a real event places it.
+    this.ship.visible = false;
     const sc = (TW * 1.5) / this.world.ship.width;
     this.ship.width = this.world.ship.width * sc;
     this.ship.height = this.world.ship.height * sc;
@@ -170,7 +191,9 @@ export class CityView {
       this.glow.closePath();
       this.glow.fill({ color: 0xffd34d, alpha: 0.4 });
     }
-    const island = this.layout.islands.find((i) => i.id === view.shipIsland) ?? this.layout.islands[0];
+    // No fallback island: markers only appear where an event
+    // actually pointed. Unknown stays unknown.
+    const island = this.layout.islands.find((i) => i.id === view.shipIsland);
     if (view.locationUnknown && island) {
       const [gx, gy] = proj.project(island.gate.gx + 1, island.gate.gy + 1);
       this.glow.circle(gx, gy, TW * 0.5);
@@ -184,7 +207,9 @@ export class CityView {
       this.glow.closePath();
       this.glow.fill({ color: view.testPassed ? 0x3fae5a : 0xd4402b, alpha: 0.95 });
     }
-    // ship target: the touched building, else the island gate
+    // ship target: the touched building, else the island gate —
+    // only when an event named an island. Otherwise no target and
+    // the ship stays hidden rather than invented somewhere.
     const filePos = view.shipFile ? this.layout.filePos.get(view.shipFile) : undefined;
     if (filePos) {
       const [tx, ty] = proj.project(filePos.gx + PLOT / 2, filePos.gy + PLOT + 0.4);
@@ -195,9 +220,18 @@ export class CityView {
       const [tx, ty] = proj.project(island.gate.gx + 1, island.gate.gy + island.rows * PLOT + 0.6);
       this.shipTarget = [tx, ty];
       this.construction.visible = false;
+    } else {
+      this.shipTarget = null;
+      this.construction.visible = false;
     }
-    if (this.shipTarget && this.ship.position.x === 0 && this.ship.position.y === 0) {
-      this.ship.position.set(this.shipTarget[0], this.shipTarget[1]);
+    if (this.shipTarget) {
+      this.ship.visible = true;
+      if (!this.shipPlaced) {
+        this.ship.position.set(this.shipTarget[0], this.shipTarget[1]);
+        this.shipPlaced = true;
+      }
+    } else {
+      this.ship.visible = false;
     }
   }
 }

@@ -7,7 +7,7 @@
 import type { Extraction } from "./types";
 
 export const PLOT = 2; // cells per building plot edge
-export const GAP = 4; // water cells between islands
+export const GAP_PLOTS = 2; // water between islands, in plots (4 cells)
 
 export interface CityIsland {
   id: string;
@@ -37,6 +37,9 @@ export interface CityLayout {
   rows: number;
   fileToIsland: Map<string, string>;
   filePos: Map<string, { gx: number; gy: number; islandId: string }>;
+  /** Files whose island_id matches no island: counted and named by
+   * the caller, never silently dropped or invented onto an island. */
+  droppedFiles: string[];
 }
 
 export function layoutCity(extraction: Extraction): CityLayout {
@@ -69,7 +72,7 @@ export function layoutCity(extraction: Extraction): CityLayout {
     const rows = Math.ceil(files.length / cols);
     if (cursorX > 0 && cursorX + cols > shelfPlots) {
       cursorX = 0;
-      cursorY += shelfH + GAP;
+      cursorY += shelfH + GAP_PLOTS;
       shelfH = 0;
     }
     const x = cursorX * PLOT;
@@ -93,9 +96,14 @@ export function layoutCity(extraction: Extraction): CityLayout {
       fileToIsland.set(f.path, isl.id);
       filePos.set(f.path, { gx, gy, islandId: isl.id });
     });
-    cursorX += cols + GAP / PLOT;
+    cursorX += cols + GAP_PLOTS;
     shelfH = Math.max(shelfH, rows);
   }
+
+  const knownIslands = new Set(placed.map((i) => i.id));
+  const droppedFiles = extraction.files
+    .filter((f) => !knownIslands.has(f.island_id))
+    .map((f) => f.path);
 
   const cols = placed.reduce((m, i) => Math.max(m, i.x + i.cols * PLOT), 0);
   const rows = placed.reduce((m, i) => Math.max(m, i.y + i.rows * PLOT), 0);
@@ -107,6 +115,7 @@ export function layoutCity(extraction: Extraction): CityLayout {
     rows,
     fileToIsland,
     filePos,
+    droppedFiles,
   };
 }
 

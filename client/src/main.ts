@@ -87,49 +87,83 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     task: params.get("task") ?? undefined,
     spawn: params.get("spawn") === "1",
   });
-  const home = layout.islands[0]?.id ?? null;
-  let view: SessionView = initialView(session.id, home);
-  const exposed = { layout, view, session, report: null as unknown };
+  // No island is chosen at creation (quest targeting is T12), so the
+  // ship has no home: it stays off-screen until a real event places
+  // it. Drawing it at the biggest island would invent a location.
+  let view: SessionView = initialView(session.id, session.island_id);
+  const exposed = { layout, view, session, report: null as unknown, city };
   (window as unknown as { __city: unknown }).__city = exposed;
-  const refresh = () => {
+  const droppedNote =
+    layout.droppedFiles.length > 0 ? ` · ${layout.droppedFiles.length} files without an island (not drawn)` : "";
+  const refresh = (extra = "") => {
     exposed.view = view;
     city.update(view);
     status.textContent =
       `Repo City · ${layout.islands.length} islands · ${layout.buildings.length} buildings · session ${view.state}` +
       (view.shipFile ? ` · ship at ${view.shipFile}` : view.locationUnknown ? " · location unknown" : "") +
-      (view.cliSessionId ? ` · cli ${view.cliSessionId.slice(0, 8)}` : "");
+      (view.cliSessionId ? ` · cli ${view.cliSessionId.slice(0, 8)}` : "") +
+      droppedNote +
+      extra;
   };
   refresh();
 
   const showReport = async () => {
-    const report = await fetchReport(server, session.id);
-    exposed.report = report;
     const el = document.getElementById("report")!;
     el.style.display = "block";
-    el.textContent = report.available
-      ? `Report (${report.generated_by})\n${report.summary}`
-      : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`;
+    try {
+      const report = await fetchReport(server, session.id);
+      exposed.report = report;
+      el.textContent = report.available
+        ? `Report (${report.generated_by})\n${report.summary}`
+        : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`;
+    } catch (e) {
+      el.textContent = `Report unavailable\nCould not fetch the report: ${(e as Error).message}. The raw events are in the server log; no report was invented.`;
+      status.classList.add("fail");
+      refresh(" · report fetch failed");
+    }
   };
 
-  connectEvents(
-    server,
-    0,
-    (event: StoredEvent) => {
-      const before = view;
-      view = applyEvent(view, event, layout.fileToIsland);
-      if (view !== before) {
-        refresh();
-        if (event.type === "session_finished") void showReport().catch(() => undefined);
-      }
-    },
-    () => undefined,
-  );
+  // Reconnecting stream: resume after the last event id seen; the
+  // reducer ignores replayed duplicates by sequence.
+  let lastEventId = 0;
+  const connect = () => {
+    connectEvents(
+      server,
+      lastEventId,
+      (event: StoredEvent) => {
+        lastEventId = Math.max(lastEventId, event.id);
+        const before = view;
+        view = applyEvent(view, event, layout.fileToIsland);
+        if (view !== before) {
+          refresh();
+          if (event.type === "session_finished") void showReport();
+        }
+      },
+      (state) => {
+        if (state === "open") {
+          status.classList.remove("fail");
+          refresh();
+        } else {
+          status.classList.add("fail");
+          refresh(" · connection lost — reconnecting, picture may be stale");
+          setTimeout(connect, 1000);
+        }
+      },
+    );
+  };
+  connect();
 
   const controls = document.getElementById("controls")!;
   controls.style.display = "flex";
   document.getElementById("stop-report")!.addEventListener("click", async () => {
-    await stopSession(server, session.id).catch(() => undefined);
-    await showReport().catch(() => undefined);
+    try {
+      await stopSession(server, session.id);
+    } catch (e) {
+      status.classList.add("fail");
+      refresh(` · stop failed: ${(e as Error).message} (the session may still be running)`);
+      return;
+    }
+    await showReport();
     refresh();
   });
 }
