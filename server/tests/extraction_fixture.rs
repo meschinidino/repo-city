@@ -322,6 +322,23 @@ fn codex_regressions_nested_python_from_import_and_js_extension() {
 }
 
 #[test]
+fn python_absolute_import_prefers_project_root_over_sibling() {
+    let dir = std::env::temp_dir().join(format!("repo-city-pyroot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("pkg/sub")).expect("mkdir");
+    std::fs::write(dir.join("pyproject.toml"), "[project]\nname = \"x\"\n").expect("write pyproject");
+    std::fs::write(dir.join("config.py"), "VALUE = 'root'\n").expect("write root config");
+    std::fs::write(dir.join("pkg/__init__.py"), "").expect("write pkg init");
+    std::fs::write(dir.join("pkg/sub/__init__.py"), "").expect("write sub init");
+    std::fs::write(dir.join("pkg/sub/config.py"), "VALUE = 'sibling'\n").expect("write sibling config");
+    std::fs::write(dir.join("pkg/sub/mod.py"), "import config\n\nVALUE = config\n").expect("write mod");
+    let extraction = extract_repo(&dir).expect("extract pyroot repo");
+    assert_eq!(file(&extraction, "config.py").importer_count, 1);
+    assert_eq!(file(&extraction, "pkg/sub/config.py").importer_count, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn missing_root_is_an_error_not_an_empty_extraction() {
     let dir = std::env::temp_dir().join("repo-city-definitely-missing-xyz");
     assert!(extract_repo(&dir).is_err());
