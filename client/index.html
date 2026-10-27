@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Repo City — sprite pipeline (T11)</title>
+    <style>
+      html, body { margin: 0; background: #13262b; color: #eaf2f0; font-family: system-ui, sans-serif; }
+      #app canvas { display: block; }
+      #status { position: fixed; left: 12px; bottom: 12px; background: rgba(19,38,43,.92); padding: 8px 12px; border-radius: 10px; font-size: 13px; max-width: 90vw; }
+      #status.fail { outline: 2px solid #d4402b; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="status">Loading sprite sheets…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

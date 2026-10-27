@@ -2,6 +2,21 @@
 
 All notable changes to Repo City. Versions follow the `VERSION` file.
 
+## [0.2.0] - 2026-10-26
+
+Scope amendment (2026-10-26): single-package repos and Python extraction. The available real repo (GestiKo) is one TS frontend package plus a Python backend in a single repo, not a TS monorepo; without this change it produced one island and no bridges and there was no real repo for the demo. Recorded as an amendment in `specs/design.md` and task T13 in `specs/tasks.jsonl`; `ROADMAP.md`, `AGENTS.md` and `notes/working-notes.md` updated to match. Go extraction deferred to the end of the hackathon only if time remains; multi-repo stays out of scope. T13 implemented: Python import extraction (`rustpython-parser`) and single-package feature/module districts in `server/src/extract/`, with a hand-counted single-package fixture (9 files, 8 imports, 6 resolved, 2 unresolved) in `server/tests/`. Real-repo run on GestiKo: 600 files, 43 islands, 232 bridges, 0 parse errors.
+
+T11: sprite pipeline ported from the prototype into the client.
+
+### Added
+- `client/`: Vite + TypeScript + PixiJS client scaffold (Vitest for tests). Run it with `npm --prefix client run dev`; `?full=1` renders at 200 px per tile.
+- `client/src/map/`: the pipeline as small pure functions — magenta and cyan keying, cut-out by connected shape, plate measurement and footprint choice, tile fitting, coast autotiling, occupancy layout with trees, code-drawn bridges and lanes — plus the Pixi renderer for the same three-island test map. Sheets load from `assets/sprites/`.
+- `client/src/map/pipeline.test.ts`: every check from the prototype's checks table as a Vitest test against the committed sheets, at the pass levels in `DESIGN.md`. The same fail-level checks gate the render at load in the client.
+- `client/e2e/smoke.spec.ts`: first Playwright E2E smoke (run with `npm --prefix client run test:e2e`, browser via `test:e2e:install`). It starts the Vite dev server itself, asserts the fail-level checks pass in the page, the three islands (api, auth, payments; 17 buildings, 15 trees) render with real sea/grass/sail pixels in the screenshot, no console errors, and the `?full=1` canvas is exactly 4200×2440 (200 px per tile). The five user journeys in `specs/test-plan.md` remain unimplemented until the session features they drive exist.
+
+### Changed
+- Tile fitting now straightens tile edges after the affine warp (per-column shift by the smoothed residual to the exact diamond). Measured on the committed sheets: the prototype's pre-fit edge error reproduces at 1.394% of tile width; the fitted tiles measure 0.25% worst, under the 1% target in `DESIGN.md`. Both numbers print in the test run.
+
 ## [0.1.2] - 2026-10-26
 
 Ready for handoff to another coding agent. No application code yet.
