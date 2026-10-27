@@ -114,6 +114,11 @@ test("city gate journey (watcher-driven, no agent): islands, lit building, repor
     { timeout: 10_000 },
   );
   await page.mouse.dblclick(640, 360);
+  await page.waitForFunction(
+    (before) => Math.abs((window as unknown as { __city: { city: { cameraScale: number } } }).__city.city.cameraScale - before) < 0.01,
+    scaleBefore,
+    { timeout: 10_000 },
+  );
 
   // A shell-style edit: nothing names this file except the watcher.
   appendFileSync(join(repoDir, "packages/api/src/index.ts"), "\n// e2e touch\n");

@@ -73,13 +73,22 @@ export class CityView {
   }
 
   private fitCamera(): void {
-    const w = this.app.renderer.width;
-    const h = this.app.renderer.height;
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
     this.fitScale = Math.min(w / this.proj.width, h / this.proj.height);
     this.cam.scale = this.fitScale;
     this.cam.x = (w - this.proj.width * this.cam.scale) / 2;
     this.cam.y = (h - this.proj.height * this.cam.scale) / 2;
     this.applyCam();
+  }
+
+  /** Keep at least a corner of the world on screen while panning. */
+  private clampPan(): void {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    const keep = 120;
+    this.cam.x = Math.min(w - keep, Math.max(keep - this.proj.width * this.cam.scale, this.cam.x));
+    this.cam.y = Math.min(h - keep, Math.max(keep - this.proj.height * this.cam.scale, this.cam.y));
   }
 
   get shipVisible(): boolean {
@@ -94,30 +103,38 @@ export class CityView {
       height: window.innerHeight || proj.height,
       background: 0x4f98a6,
       antialias: true,
-      resolution: 1,
+      resolution: Math.min(2, window.devicePixelRatio || 1),
+      autoDensity: true,
     });
     const root = new Container();
     this.root = root;
     this.app.stage.addChild(root);
     this.fitCamera();
-    // Camera (DESIGN.md zoom levels): wheel zooms to the cursor,
+    // Camera: geometric pan/zoom toward DESIGN.md's zoom levels
+    // (semantic level switching is T12). Wheel zooms to the cursor,
     // drag pans, double-click returns to the fitted map view.
     const el = this.app.canvas as unknown as HTMLCanvasElement;
+    el.style.touchAction = "none";
+    let userMoved = false;
     el.addEventListener(
       "wheel",
       (e) => {
         e.preventDefault();
+        userMoved = true;
         const next = Math.min(this.fitScale * 8, Math.max(this.fitScale * 0.9, this.cam.scale * Math.exp(-e.deltaY * 0.0012)));
         const k = next / this.cam.scale;
         this.cam.x = e.offsetX - (e.offsetX - this.cam.x) * k;
         this.cam.y = e.offsetY - (e.offsetY - this.cam.y) * k;
         this.cam.scale = next;
+        this.clampPan();
         this.applyCam();
       },
       { passive: false },
     );
     let drag: { x: number; y: number; cx: number; cy: number } | null = null;
     el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      userMoved = true;
       drag = { x: e.clientX, y: e.clientY, cx: this.cam.x, cy: this.cam.y };
       el.setPointerCapture(e.pointerId);
     });
@@ -125,12 +142,24 @@ export class CityView {
       if (!drag) return;
       this.cam.x = drag.cx + (e.clientX - drag.x);
       this.cam.y = drag.cy + (e.clientY - drag.y);
+      this.clampPan();
       this.applyCam();
     });
     el.addEventListener("pointerup", () => (drag = null));
-    el.addEventListener("dblclick", () => this.fitCamera());
+    el.addEventListener("pointercancel", () => (drag = null));
+    el.addEventListener("dblclick", () => {
+      userMoved = false;
+      this.fitCamera();
+    });
     window.addEventListener("resize", () => {
       this.app.renderer.resize(window.innerWidth, window.innerHeight);
+      this.fitScale = Math.min(this.app.screen.width / this.proj.width, this.app.screen.height / this.proj.height);
+      if (!userMoved) this.fitCamera();
+      else {
+        this.cam.scale = Math.min(this.fitScale * 8, Math.max(this.fitScale * 0.9, this.cam.scale));
+        this.clampPan();
+        this.applyCam();
+      }
     });
     const tileTex = Texture.from(pixelsToCanvas(this.world.tiles[PLAIN_GRASS_INDEX]));
     const tileH = (this.world.tiles[PLAIN_GRASS_INDEX].height * TW) / TWBASE;

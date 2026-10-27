@@ -128,3 +128,33 @@ describe("bridgeSpan (design review: bridges stay on water)", () => {
     expect(bridgeSpan(a, { x: 5, y: 5, w: 10, h: 10 })).toBeNull();
   });
 });
+
+describe("bridgeSpan directions and degenerate cases", () => {
+  const a = { x: 20, y: 20, w: 10, h: 10 };
+  const cases: [string, { x: number; y: number; w: number; h: number }][] = [
+    ["left", { x: 0, y: 22, w: 10, h: 10 }],
+    ["above", { x: 22, y: 0, w: 10, h: 10 }],
+    ["vertical (dx = 0)", { x: 20, y: 50, w: 10, h: 10 }],
+    ["diagonal down-left", { x: 0, y: 50, w: 10, h: 10 }],
+  ];
+  for (const [name, b] of cases) {
+    it(`span stays out of both interiors: ${name}`, () => {
+      const span = bridgeSpan(a, b);
+      expect(span).not.toBeNull();
+      const inInterior = (pt: { gx: number; gy: number }, r: typeof a) =>
+        pt.gx > r.x + 0.001 && pt.gx < r.x + r.w - 0.001 && pt.gy > r.y + 0.001 && pt.gy < r.y + r.h - 0.001;
+      const [p, q] = span!;
+      for (let i = 0; i <= 10; i++) {
+        const pt = { gx: p.gx + ((q.gx - p.gx) * i) / 10, gy: p.gy + ((q.gy - p.gy) * i) / 10 };
+        expect(inInterior(pt, a)).toBe(false);
+        expect(inInterior(pt, b)).toBe(false);
+      }
+    });
+  }
+  it("touching islands have no water span", () => {
+    expect(bridgeSpan(a, { x: 30, y: 20, w: 10, h: 10 })).toBeNull();
+  });
+  it("an island to itself has no span", () => {
+    expect(bridgeSpan(a, a)).toBeNull();
+  });
+});
