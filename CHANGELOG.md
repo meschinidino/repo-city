@@ -4,6 +4,10 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ## [Unreleased]
 
+### Merged — PR #18 accepted by the owner (2026-10-28)
+- Step 4 (T12 Harbor bar and its owner rounds) passed owner judgement and merged. One Opus review pass over the last two rounds is still owed; both reviewers were at their usage limits.
+- Owner todo: a sprite for bridge corners, so bent bridges turn on a corner piece instead of two straight tiles.
+
 ### Added — T12 Harbor bar (step 4, on `feat/t12-harbor-bar`, not merged)
 - Bottom command bar (approved variant A): one token per session of the open repo, newest and active first, in one scroll row; New quest opens the quest log above the bar.
 - Quest log: create a quest in plain English with a target island (click the map for a lane-gold ring, or use the list) and an agent choice (Claude agent in its worktree, or watch-only). Pause, resume, stop, archive, and follow-up run on the T5 routes; server refusals show in words.
