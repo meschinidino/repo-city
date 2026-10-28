@@ -13,6 +13,8 @@ export interface SessionInfo {
   island_id: string | null;
   task: string | null;
   state: string;
+  model: string | null;
+  effort: string | null;
   cli_session_id: string | null;
   created_ms: number;
   updated_ms: number;
@@ -105,7 +107,7 @@ export async function fetchExtraction(server: string, repo: string): Promise<Ext
 export async function createSession(
   server: string,
   repo: string,
-  opts: { task?: string; spawn?: boolean; islandId?: string } = {},
+  opts: { task?: string; spawn?: boolean; islandId?: string; model?: string; effort?: string } = {},
 ): Promise<SessionInfo> {
   const res = await fetched(`${server}/api/sessions`, {
     method: "POST",
@@ -117,6 +119,8 @@ export async function createSession(
       task: opts.task,
       spawn: opts.spawn ?? false,
       island_id: opts.islandId,
+      model: opts.model,
+      effort: opts.effort,
     }),
   });
   return (await jsonOrThrow(res)) as SessionInfo;

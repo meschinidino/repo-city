@@ -321,6 +321,42 @@ struct CreateSession {
     /// file events then come from real edits, whoever makes them.
     #[serde(default)]
     spawn: bool,
+    /// Agent model for the spawned Claude process (T12 form):
+    /// a CLI alias (`opus`, `sonnet`, `haiku`) or a full model
+    /// name. None = the CLI default.
+    model: Option<String>,
+    /// Agent effort for the spawned Claude process: one of
+    /// low, medium, high, xhigh, max. None = the CLI default.
+    effort: Option<String>,
+}
+
+/// Model/effort as the Claude CLI takes them, or a refusal.
+fn valid_agent_choices(
+    model: &Option<String>,
+    effort: &Option<String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let model = model.as_deref().map(str::trim).filter(|m| !m.is_empty());
+    if let Some(m) = model {
+        // Full names: claude-<letters, digits, dot, dash> with an
+        // optional [1m] context suffix. The value goes to the CLI
+        // as one argv element (no shell), but it is also stored
+        // and shown, so reject spaces and control characters.
+        let bare = m.strip_suffix("[1m]").unwrap_or(m);
+        let full_name = bare.starts_with("claude-")
+            && bare.len() <= 60
+            && bare.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-');
+        let ok = ["opus", "sonnet", "haiku"].contains(&m) || full_name;
+        if !ok {
+            return Err(format!("unknown model `{m}`: use opus, sonnet, haiku, or a full claude- name"));
+        }
+    }
+    let effort = effort.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    if let Some(e) = effort {
+        if !["low", "medium", "high", "xhigh", "max"].contains(&e) {
+            return Err(format!("unknown effort `{e}`: use low, medium, high, xhigh, or max"));
+        }
+    }
+    Ok((model.map(str::to_string), effort.map(str::to_string)))
 }
 
 async fn create_session(
@@ -351,11 +387,20 @@ async fn create_session(
     let wt_root = std::env::var("HOME")
         .map(|h| PathBuf::from(h).join(".repo-city").join("worktrees"))
         .unwrap_or_else(|_| std::env::temp_dir().join("repo-city-worktrees"));
+    let (model, effort) = match valid_agent_choices(&body.model, &body.effort) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    // Watch-only sessions have no agent: store no model/effort,
+    // whatever the caller sent (the client already drops them).
+    let (model, effort) = if body.spawn { (model, effort) } else { (None, None) };
     let session = match state.store.create_session_guarded(
         &body.repo_path,
         body.island_id.as_deref(),
         body.task.as_deref(),
         body.spawn.then(|| wt_root.to_string_lossy().into_owned()).as_deref(),
+        model.as_deref(),
+        effort.as_deref(),
     ) {
         Ok(s) => s,
         Err(e @ crate::store::CreateError::IslandLocked { .. })
@@ -400,7 +445,7 @@ async fn create_session(
     state.start_watcher(&session.id, &run_root);
     if body.spawn {
         if let Some(task) = body.task.clone() {
-            spawn_claude(state.clone(), session.id.clone(), run_root, task, None);
+            spawn_claude(state.clone(), session.id.clone(), run_root, task, None, session.model.clone(), session.effort.clone());
         }
     }
     (
@@ -413,12 +458,15 @@ async fn create_session(
 /// Run the Claude adapter for one session. Permission handling here
 /// is the spike default (`acceptEdits` inside the session repo);
 /// T8 owns the permission bridge and may tighten this.
+#[allow(clippy::too_many_arguments)]
 fn spawn_claude(
     state: Arc<AppState>,
     session_id: String,
     cwd: PathBuf,
     task: String,
     resume_cli_id: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
 ) {
     // Marked synchronously so a /stop racing the spawn can wait for
     // the child to register instead of missing it entirely.
@@ -439,6 +487,16 @@ fn spawn_claude(
         if let Some(cli_id) = &resume_cli_id {
             args.push("--resume".into());
             args.push(cli_id.clone());
+        }
+        // The agent choices from the quest form (T12), kept on
+        // resume and follow-up so a quest keeps its model/effort.
+        if let Some(m) = &model {
+            args.push("--model".into());
+            args.push(m.clone());
+        }
+        if let Some(e) = &effort {
+            args.push("--effort".into());
+            args.push(e.clone());
         }
         let mut child = match tokio::process::Command::new("claude")
             .args(&args)
@@ -776,8 +834,10 @@ async fn resume_session(
                     root,
                     format!("Continue this task: {task}"),
                     Some(cli_id),
+                    session.model.clone(),
+                    session.effort.clone(),
                 ),
-                None => spawn_claude(state.clone(), id.clone(), root, task, None),
+                None => spawn_claude(state.clone(), id.clone(), root, task, None, session.model.clone(), session.effort.clone()),
             }
         }
     }
@@ -849,7 +909,7 @@ async fn follow_up_session(
     let root = PathBuf::from(session.worktree_path.as_deref().unwrap_or(&session.repo_path));
     let _ = state.emit(&id, Source::System, EventPayload::SessionStarted { cli_session_id: Some(cli_id.clone()) });
     state.start_watcher(&id, &root);
-    spawn_claude(state.clone(), id.clone(), root, body.task.clone(), Some(cli_id));
+    spawn_claude(state.clone(), id.clone(), root, body.task.clone(), Some(cli_id), before.model.clone(), before.effort.clone());
     let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
     session_json(&updated).into_response()
 }
@@ -935,5 +995,42 @@ async fn ws_socket(state: Arc<AppState>, since_id: i64, socket: WebSocket) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_choice_tests {
+    use super::valid_agent_choices;
+
+    fn v(model: &str, effort: &str) -> Result<(Option<String>, Option<String>), String> {
+        valid_agent_choices(&Some(model.to_string()), &Some(effort.to_string()))
+    }
+
+    #[test]
+    fn aliases_and_full_names_pass() {
+        assert!(v("opus", "low").is_ok());
+        assert!(v("sonnet", "xhigh").is_ok());
+        assert!(v("haiku", "max").is_ok());
+        assert!(v("claude-opus-4-1", "high").is_ok());
+        assert!(v("claude-sonnet-5[1m]", "medium").is_ok());
+    }
+
+    #[test]
+    fn blanks_mean_cli_default() {
+        let none: Option<String> = None;
+        assert_eq!(valid_agent_choices(&none, &none).unwrap(), (None, None));
+        assert_eq!(v("  ", " ").unwrap(), (None, None));
+        assert_eq!(v(" opus ", " high ").unwrap().0.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn bad_values_are_refused() {
+        assert!(v("gpt-5", "low").is_err());
+        assert!(v("opus", "High").is_err());
+        assert!(v("opus", "turbo").is_err());
+        assert!(v("claude-x y", "low").is_err());
+        assert!(v("claude-X", "low").is_err());
+        let too_long = format!("claude-{}", "a".repeat(60));
+        assert!(v(&too_long, "low").is_err());
     }
 }

@@ -124,6 +124,23 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     }
   };
   void bar.refresh();
+  // The quest log sits directly above the bar. The bar height
+  // changes when its rows wrap (narrow windows), so measure it
+  // instead of a fixed offset (QA: create button overlapped the
+  // bar buttons at 360px wide).
+  const placeQuestlog = () => {
+    const barEl = document.getElementById("bar")!;
+    const logEl = document.getElementById("questlog")!;
+    logEl.style.bottom = `${barEl.offsetHeight + 8}px`;
+    // Cap the height against the same measured bar, so a tall
+    // (wrapped) bar cannot push the sheet top off-screen.
+    logEl.style.maxHeight = `calc(100dvh - ${barEl.offsetHeight + 24}px)`;
+  };
+  placeQuestlog();
+  window.addEventListener("resize", placeQuestlog);
+  // The bar can also grow later (status text wraps, tokens are
+  // added), so watch its size, not only window resizes.
+  new ResizeObserver(placeQuestlog).observe(document.getElementById("bar")!);
   // Tokens follow every session, not only the primary one: poll
   // the list, and re-anchor an open report card as the camera moves.
   setInterval(() => void bar.refresh(), 5000);
@@ -177,12 +194,23 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
       return;
     }
     const left = Math.min(Math.max(8, anchor[0] - w / 2), Math.max(8, window.innerWidth - w - 8));
-    const top = Math.max(8, Math.min(anchor[1] + 16, window.innerHeight - 300));
+    // Above the island when below would bury the card in the bar.
+    // Measure both: the bar grows when it wraps (narrow windows),
+    // and the card height depends on its content.
+    const barH = document.getElementById("bar")!.offsetHeight;
+    const h = el.offsetHeight;
+    let top = anchor[1] + 16;
+    let below = true;
+    if (top + h > window.innerHeight - barH - 8) {
+      top = anchor[1] - h - 16;
+      below = false;
+    }
+    top = Math.max(8, Math.min(top, Math.max(8, window.innerHeight - barH - 8 - h)));
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
     const cx = left + w / 2;
     const dx = cx - anchor[0];
-    const dy = top - anchor[1];
+    const dy = (below ? top + h : top) - anchor[1];
     line.style.display = "block";
     line.style.left = `${anchor[0]}px`;
     line.style.top = `${anchor[1]}px`;

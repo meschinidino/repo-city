@@ -36,3 +36,26 @@ watcher-only (spawn=false); no live Claude run is claimed.
   can hug its own shore (unconfirmed, from the bridge work).
 - Simulated vs real: e2e sessions are watcher-only. No live
   Claude process pause/resume is claimed here.
+
+## Owner feedback + QA round (2026-10-28, later)
+
+- Owner points 1-5 addressed in code: bar restyle (gradient,
+  orange top border, gradient tokens, ship icon), model/effort
+  pickers end to end (server check, storage, spawn/resume/
+  follow-up args), pulsing island ring, stable token order,
+  report card above the island with measured heights.
+- QA (gstack-qa): responsive probe at 390/360/320px. One defect
+  found and fixed: the quest log sheet overlapped the bar buttons
+  at narrow widths (fixed bar offset vs wrapping bar). The sheet
+  now measures the bar (ResizeObserver). Regression kept as
+  `client/e2e/responsive.spec.ts`.
+- Cross review: Claude Opus read-only pass over the round diff;
+  8 fixes made, 2 claims checked and closed (CLI accepts
+  `--model`/`--effort`; all session queries read the new
+  columns). New unit tests: model/effort validation (3 tests).
+- Gates after the round: Vitest 78, tsc clean, Playwright 5,
+  cargo tests pass (24 lib), clippy clean.
+- Honest limits: e2e sessions are watcher-only (spawn=false).
+  No live Claude run with a chosen model/effort has been
+  observed. The owner has not judged this round yet; PR #18
+  stays open.

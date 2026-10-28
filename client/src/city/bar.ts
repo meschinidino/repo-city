@@ -87,13 +87,24 @@ export class HarborBar {
   private deps: HarborDeps;
   private sessions: SessionInfo[] = [];
   private selectedId: string | null = null;
+  private scrolledToId: string | null = null;
   private logOpen = false;
 
   constructor(deps: HarborDeps) {
     this.deps = deps;
     el("new-quest").addEventListener("click", () => this.toggleLog());
     el("create-btn").addEventListener("click", () => void this.create());
-    el<HTMLSelectElement>("agent-select").addEventListener("change", () => this.renderLog());
+    const syncAgentSelects = () => {
+      const watch = el<HTMLSelectElement>("agent-select").value === "watch";
+      el<HTMLSelectElement>("model-select").disabled = watch;
+      el<HTMLSelectElement>("effort-select").disabled = watch;
+    };
+    el<HTMLSelectElement>("agent-select").addEventListener("change", () => {
+      syncAgentSelects();
+      this.renderLog();
+    });
+    // A restored form can open on "watch" with no change event.
+    syncAgentSelects();
     el<HTMLSelectElement>("island-select").addEventListener("change", () => {
       const v = el<HTMLSelectElement>("island-select").value;
       this.deps.onTargetPicked(v || null);
@@ -164,14 +175,17 @@ export class HarborBar {
   private render(): void {
     const wrap = el("tokens");
     wrap.innerHTML = "";
-    // Newest first (server lists oldest first); active before done.
-    const ordered = [...this.sessions].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.created_ms - a.created_ms);
+    // Stable order (newest first): a quest never jumps along the
+    // bar when its state changes (owner call).
+    const ordered = [...this.sessions].sort((a, b) => b.created_ms - a.created_ms);
     for (const s of ordered) {
       const b = document.createElement("button");
       b.className = "token" + (s.id === this.selectedId ? " selected" : "");
       b.dataset.id = s.id;
-      const sail = document.createElement("span");
-      sail.className = "sail";
+      const sail = document.createElement("img");
+      sail.className = "ship";
+      sail.src = "/ship-icon.png";
+      sail.alt = "";
       const label = document.createElement("span");
       label.className = "token-text";
       label.textContent = `${this.islandName(s.island_id)} · ${stateText(s.state)}`;
@@ -186,6 +200,14 @@ export class HarborBar {
       });
       wrap.appendChild(b);
     }
+    // Keep the selected token in view, but only when the
+    // selection changes: render() also runs on the 5s poll, and
+    // scrolling then would fight the user's own scrolling.
+    if (this.selectedId && this.selectedId !== this.scrolledToId) {
+      this.scrolledToId = this.selectedId;
+      wrap.querySelector(".token.selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    if (!this.selectedId) this.scrolledToId = null;
     this.renderLog();
   }
 
@@ -211,7 +233,8 @@ export class HarborBar {
     }
     detail.style.display = "block";
     el("detail-title").textContent = s.task ?? "Untitled quest";
-    el("detail-state").textContent = `${this.islandName(s.island_id)} — ${stateText(s.state)}`;
+    const chosen = [s.model, s.effort].filter(Boolean).join(" · ");
+    el("detail-state").textContent = `${this.islandName(s.island_id)} — ${stateText(s.state)}${chosen ? ` · ${chosen}` : ""}`;
     const allowed = actionsFor(s);
     for (const [id, action] of [
       ["act-pause", "pause"],
@@ -240,8 +263,10 @@ export class HarborBar {
       this.toggleLog(true);
       return;
     }
+    const model = el<HTMLSelectElement>("model-select").value || undefined;
+    const effort = el<HTMLSelectElement>("effort-select").value || undefined;
     try {
-      const s = await createSession(this.deps.server, this.deps.repo, { task, spawn, islandId });
+      const s = await createSession(this.deps.server, this.deps.repo, { task, spawn, islandId, model: spawn ? model : undefined, effort: spawn ? effort : undefined });
       this.selectedId = s.id;
       el<HTMLInputElement>("quest-task").value = "";
       this.showError("");

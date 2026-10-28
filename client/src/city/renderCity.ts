@@ -248,21 +248,32 @@ export class CityView {
     return this.toScreen(wx, wy);
   }
 
-  /** Lane-gold selection ring around an island (D-create). */
+  /** Lane-gold selection ring around an island (D-create).
+   * It pulses (UI feedback, owner: not evident enough) from the
+   * ticker, so the picked island is unmissable. */
   selectIsland(id: string | null): void {
     this.ringIsland = id;
+    this.drawRing(0);
+  }
+
+  private drawRing(nowMs: number): void {
     this.ring.clear();
-    if (!id) return;
-    const isl = this.layout.islands.find((i) => i.id === id);
+    if (!this.ringIsland) return;
+    const isl = this.layout.islands.find((i) => i.id === this.ringIsland);
     if (!isl) return;
-    const pts = [
-      this.proj.project(isl.x - 1.4, isl.y - 1.4),
-      this.proj.project(isl.x + isl.cols * PLOT + 1.4, isl.y - 1.4),
-      this.proj.project(isl.x + isl.cols * PLOT + 1.4, isl.y + isl.rows * PLOT + 1.4),
-      this.proj.project(isl.x - 1.4, isl.y + isl.rows * PLOT + 1.4),
-    ];
-    this.ring.poly(pts.flat());
-    this.ring.stroke({ color: 0xffe3a3, width: 3.5, alpha: 0.95 });
+    // Reduced motion: draw the ring steady, with no pulse.
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const pulse = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(nowMs / 260);
+    for (const [grow, width, alpha] of [[1.4, 3 + 1.6 * pulse, 0.65 + 0.35 * pulse], [2.3, 7, 0.12 + 0.1 * pulse]] as const) {
+      const pts = [
+        this.proj.project(isl.x - grow, isl.y - grow),
+        this.proj.project(isl.x + isl.cols * PLOT + grow, isl.y - grow),
+        this.proj.project(isl.x + isl.cols * PLOT + grow, isl.y + isl.rows * PLOT + grow),
+        this.proj.project(isl.x - grow, isl.y + isl.rows * PLOT + grow),
+      ];
+      this.ring.poly(pts.flat());
+      this.ring.stroke({ color: 0xffe3a3, width, alpha });
+    }
   }
 
   private fitCamera(): void {
@@ -736,6 +747,7 @@ export class CityView {
     // sail toward the target every frame; motion follows events only
     this.app.ticker.add((time) => {
       this.drawPulses(time.lastTime);
+      if (this.ringIsland) this.drawRing(time.lastTime);
       if (!this.shipTarget) return;
       const [tx, ty] = this.shipTarget;
       this.ship.position.x += (tx - this.ship.position.x) * 0.07;
