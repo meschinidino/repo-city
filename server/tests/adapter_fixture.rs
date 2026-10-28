@@ -108,3 +108,12 @@ fn muse_any_terminal_kind_maps_by_its_terminal_word() {
         EventPayload::SessionFinished { outcome: Outcome::Stopped, reason: Some(r) } if r == "user stop"
     ));
 }
+
+#[test]
+fn simulated_claude_thinking_maps_to_reasoning() {
+    let stream = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"check the parser first\"},{\"type\":\"text\",\"text\":\"looking now\"}]}}\n";
+    let (events, _, stats) = translate_stream(stream);
+    assert_eq!(stats.mapped, 2);
+    assert!(matches!(&events[0], EventPayload::AgentReasoning { text } if text == "check the parser first"));
+    assert!(matches!(&events[1], EventPayload::AgentMessage { text } if text == "looking now"));
+}

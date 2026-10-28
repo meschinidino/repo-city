@@ -103,6 +103,15 @@ pub fn translate_line(line: &str) -> Translated {
                                 }
                             }
                         }
+                        Some("thinking") => {
+                            if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+                                if !text.trim().is_empty() {
+                                    events.push(EventPayload::AgentReasoning {
+                                        text: text.to_string(),
+                                    });
+                                }
+                            }
+                        }
                         Some("tool_use") => match file_touched(block) {
                             Some(event) => events.push(event),
                             None => kinds.push(format!(

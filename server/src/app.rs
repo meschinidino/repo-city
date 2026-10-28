@@ -240,6 +240,7 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/archive", post(archive_session))
         .route("/api/sessions/{id}/follow-up", post(follow_up_session))
+        .route("/api/sessions/{id}/message", post(message_session))
         .route("/ws", get(ws_handler))
         // Local single-user tool: only loopback pages (the Vite dev
         // client) may call this API from a browser. A permissive
@@ -669,7 +670,7 @@ fn spawn_claude(
                 .ok()
                 .flatten()
                 .is_some_and(|s| s.state != "working");
-        if finish_state.is_some() {
+        if finish_state.is_some() || stopped_externally {
             if let Some(c) = child.as_mut() {
                 let _ = c.start_kill();
             }
@@ -713,6 +714,16 @@ fn spawn_claude(
                 .set_state(&session_id, if ok { "finished" } else { "failed" });
         } else if let Some(state_name) = finish_state {
             let _ = state.store.set_state(&session_id, state_name);
+        }
+        // Talk-to-agent: a queued message starts the next run.
+        if state
+            .store
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.state == "finished")
+        {
+            run_pending_message(state.clone(), &session_id).await;
         }
     });
 }
@@ -934,7 +945,7 @@ fn spawn_muse(
                 .ok()
                 .flatten()
                 .is_some_and(|s| s.state != "working");
-        if finish_state.is_some() {
+        if finish_state.is_some() || stopped_externally {
             if let Some(c) = child.as_mut() {
                 let _ = c.start_kill();
             }
@@ -978,6 +989,16 @@ fn spawn_muse(
                 .set_state(&session_id, if ok { "finished" } else { "failed" });
         } else if let Some(state_name) = finish_state {
             let _ = state.store.set_state(&session_id, state_name);
+        }
+        // Talk-to-agent: a queued message starts the next run.
+        if state
+            .store
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.state == "finished")
+        {
+            run_pending_message(state.clone(), &session_id).await;
         }
     });
 }
@@ -1132,6 +1153,7 @@ async fn pause_session(
         Err(e) => return transition_err(e).into_response(),
     };
     state.teardown_runtime(&id).await;
+    let _ = state.emit(&id, Source::System, EventPayload::SessionPaused);
     let _ = state.emit(&id, Source::System, EventPayload::AgentMessage { text: "Session paused.".to_string() });
     session_json(&session).into_response()
 }
@@ -1166,21 +1188,150 @@ async fn resume_session(
     // With a CLI id, resume the conversation. Without one (paused
     // before the CLI init line), a spawned session starts fresh on
     // its task instead of sitting in `working` with no agent.
-    if let Some(task) = session.task.clone() {
-        if session.worktree_path.is_some() {
-            match session.cli_session_id.clone() {
-                Some(cli_id) => spawn_agent(
-                    &session,
-                    state.clone(),
-                    root,
-                    format!("Continue this task: {task}"),
-                    Some(cli_id),
-                ),
-                None => spawn_agent(&session, state.clone(), root, task, None),
-            }
+    if session.worktree_path.is_some() {
+        // A queued message (talk-to-agent while paused) is the
+        // resume instruction when one waits; otherwise the quest
+        // continues its task in the same conversation.
+        let queued = session.pending_task.clone();
+        if let Some(q) = &queued {
+            let _ = state.store.clear_pending_task_if(&id, q);
+        }
+        let prompt = match (queued, session.task.clone()) {
+            (Some(q), _) => Some(q),
+            (None, Some(task)) => Some(match &session.cli_session_id {
+                Some(_) => format!("Continue this task: {task}"),
+                None => task,
+            }),
+            (None, None) => None,
+        };
+        if let Some(prompt) = prompt {
+            spawn_agent(&session, state.clone(), root, prompt, session.cli_session_id.clone());
         }
     }
     session_json(&session).into_response()
+}
+
+/// Send the queued message, if any, as the next run. Called by
+/// both runners right after they land a `finished` state, and by
+/// the message route itself (a message can land just after the
+/// finish check: storing it must still start the run). The move
+/// back to `working` goes through transition_state, so a stop
+/// that landed after the finish wins. The island lock is
+/// re-checked: finishing released the island, and another quest
+/// may hold it now — the message then stays queued, in words.
+async fn run_pending_message(state: Arc<AppState>, session_id: &str) {
+    let Ok(Some(session)) = state.store.get_session(session_id) else {
+        return;
+    };
+    let Some(task) = session.pending_task.clone() else {
+        return;
+    };
+    if session.worktree_path.is_none() {
+        return;
+    }
+    if let Some(island_id) = session.island_id.as_deref() {
+        if let Ok(Some(holder)) =
+            state.store.island_lock_holder(&session.repo_path, island_id, Some(session_id))
+        {
+            let _ = state.emit(
+                session_id,
+                Source::System,
+                EventPayload::AgentMessage {
+                    text: format!(
+                        "Queued message waits: island {island_id} is held by session {}.",
+                        holder.id
+                    ),
+                },
+            );
+            return;
+        }
+    }
+    // Register the spawn before the state move: a /stop in the
+    // gap then finds the marker, waits for the child, and kills
+    // it, instead of reporting success while a run starts.
+    state.spawning.lock().unwrap().insert(session_id.to_string());
+    // Take the message only if it is still the one we read; a
+    // newer queued message survives for the next finish.
+    match state.store.clear_pending_task_if(session_id, &task) {
+        Ok(true) => {}
+        _ => {
+            state.spawning.lock().unwrap().remove(session_id);
+            return;
+        }
+    }
+    let Ok(session) = state.store.transition_state(session_id, &["finished"], "working") else {
+        // The move failed (a stop landed): give the message
+        // back if no newer one replaced it meanwhile.
+        let still_none = state
+            .store
+            .get_session(session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.pending_task.is_none());
+        if still_none {
+            let _ = state.store.set_pending_task(session_id, Some(&task));
+        }
+        state.spawning.lock().unwrap().remove(session_id);
+        return;
+    };
+    let _ = state.store.set_task(session_id, &task);
+    let _ = state.emit(
+        session_id,
+        Source::System,
+        EventPayload::SessionStarted {
+            cli_session_id: session.cli_session_id.clone(),
+        },
+    );
+    let root = PathBuf::from(session.worktree_path.clone().unwrap_or_default());
+    spawn_agent(&session, state, root, task, session.cli_session_id.clone());
+}
+
+/// Message the agent (talk-to-agent). While a run is live the
+/// message queues and runs when the run ends; while paused it
+/// runs on resume. A finished quest takes the follow-up route
+/// instead (the client sends it there); a watch-only quest has
+/// no agent to talk to.
+async fn message_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<FollowUp>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    if body.task.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "message is empty".to_string()).into_response();
+    }
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    if session.worktree_path.is_none() {
+        return err(StatusCode::CONFLICT, "this is a watch-only quest: no agent runs, so there is no one to message".to_string()).into_response();
+    }
+    match session.state.as_str() {
+        "working" | "paused" => {
+            if let Err(e) = state.store.set_pending_task(&id, Some(body.task.trim())) {
+                return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+            }
+            // The run may have finished between the read above
+            // and this store: try the auto-start now, so an
+            // accepted message is never stranded in the queue.
+            // A second message replaces the queued one.
+            if session.state == "working" {
+                run_pending_message(state.clone(), &id).await;
+            }
+            let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
+            session_json(&updated).into_response()
+        }
+        other => err(
+            StatusCode::CONFLICT,
+            format!("quest is {other}: message a working or paused quest, or send a follow-up to a finished one"),
+        )
+        .into_response(),
+    }
 }
 
 /// Archive (T5): a finished, failed, or stopped quest leaves the

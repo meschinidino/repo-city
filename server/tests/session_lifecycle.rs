@@ -114,3 +114,38 @@ async fn island_lock_blocks_a_second_working_quest_until_release() {
     assert_eq!(act(&base, &a_id, "stop").await.0, reqwest::StatusCode::OK);
     assert_eq!(create(&base, &repo, Some("api")).await.0, reqwest::StatusCode::CREATED);
 }
+
+#[tokio::test]
+async fn message_refuses_watch_only_and_empty_task() {
+    let base = serve().await;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().to_string_lossy().to_string();
+    let (status, s) = create(&base, &repo, None).await;
+    assert_eq!(status, reqwest::StatusCode::CREATED);
+    let id = s["id"].as_str().unwrap();
+    let client = reqwest::Client::new();
+    // Watch-only (spawn=false): no agent to message.
+    let resp = client
+        .post(format!("{base}/api/sessions/{id}/message"))
+        .json(&serde_json::json!({"task": "hello agent"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::CONFLICT);
+    // Empty message: 400, before any session lookup.
+    let resp = client
+        .post(format!("{base}/api/sessions/{id}/message"))
+        .json(&serde_json::json!({"task": "  "}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    // Unknown session: 404.
+    let resp = client
+        .post(format!("{base}/api/sessions/nope/message"))
+        .json(&serde_json::json!({"task": "hello"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::NOT_FOUND);
+}

@@ -13,6 +13,8 @@ export type EventPayload =
   | { type: "command_run"; command: string; exit_code?: number }
   | { type: "test_result"; passed: boolean; summary: string }
   | { type: "agent_message"; text: string }
+  | { type: "agent_reasoning"; text: string }
+  | { type: "session_paused" }
   | { type: "session_finished"; outcome: Outcome; reason?: string };
 
 export type StoredEvent = EventPayload & {

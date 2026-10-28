@@ -8,7 +8,7 @@ import type { StoredEvent } from "./types";
 
 export interface SessionView {
   sessionId: string;
-  state: "idle" | "working" | "finished" | "failed" | "stopped";
+  state: "idle" | "working" | "paused" | "finished" | "failed" | "stopped";
   cliSessionId: string | null;
   /** Island the ship is at, or the session's home island at the gate. */
   shipIsland: string | null;
@@ -24,6 +24,8 @@ export interface SessionView {
   /** Latest test pennant: true = passing, false = failing. */
   testPassed: boolean | null;
   messages: string[];
+  /** Reasoning text from the agent stream, when it carries any. */
+  reasoning: string[];
   lastSeq: number;
 }
 
@@ -39,6 +41,7 @@ export function initialView(sessionId: string, homeIsland: string | null): Sessi
     intentFiles: [],
     testPassed: null,
     messages: [],
+    reasoning: [],
     lastSeq: 0,
   };
 }
@@ -59,6 +62,7 @@ export function applyEvent(
     ...view,
     lastSeq: event.seq,
     messages: [...view.messages],
+    reasoning: [...view.reasoning],
     litFiles: [...view.litFiles],
     intentFiles: [...view.intentFiles],
   };
@@ -101,6 +105,12 @@ export function applyEvent(
       break;
     case "agent_message":
       next.messages.push(event.text);
+      break;
+    case "agent_reasoning":
+      next.reasoning.push(event.text);
+      break;
+    case "session_paused":
+      next.state = "paused";
       break;
     case "session_finished":
       next.state = event.outcome === "completed" ? "finished" : event.outcome === "failed" ? "failed" : "stopped";

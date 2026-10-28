@@ -104,6 +104,11 @@
         padding: 8px 10px; font: 400 14px "Overpass", system-ui, sans-serif;
       }
       #cap-note { color: var(--warning); font-size: 13px; margin-top: 8px; display: none; }
+      #msg-note { color: var(--accent); font-size: 13px; margin-top: 6px; display: none; }
+      #agent-feed { margin-top: 10px; max-height: 180px; overflow-y: auto; display: none; }
+      #agent-feed .feed-msg { font-size: 13px; margin: 6px 0; white-space: pre-wrap; }
+      #agent-feed .feed-reason { font-size: 12px; margin: 6px 0; white-space: pre-wrap; color: var(--text-muted); font-style: italic; }
+      #agent-feed .feed-reason::before { content: "reasoning — "; font-style: normal; font-weight: 800; font-size: 10px; letter-spacing: .06em; }
       #detail-error { color: #ffb4a3; font-size: 13px; margin-top: 8px; display: none; }
       #session-detail { border-top: 1px solid rgba(234,242,240,.14); margin-top: 12px; padding-top: 10px; display: none; }
       #detail-title { font-weight: 800; }
@@ -176,6 +181,15 @@
         <div class="action-row">
           <button id="act-follow" class="ghost-btn" type="button">Send follow-up</button>
         </div>
+        <div id="msg-row">
+          <label for="msg-task">Message the agent</label>
+          <input id="msg-task" type="text" placeholder="Also look at the totals column" />
+          <div class="action-row">
+            <button id="act-msg" class="ghost-btn" type="button">Send message</button>
+          </div>
+          <p id="msg-note"></p>
+        </div>
+        <div id="agent-feed" aria-label="Agent replies and reasoning"></div>
       </div>
       <p id="detail-error"></p>
     </section>

@@ -29,6 +29,9 @@ pub struct Session {
     /// Which agent CLI runs the quest: `claude` or `muse`.
     /// None for watcher-only sessions (no agent runs).
     pub agent: Option<String>,
+    /// A message queued for the agent (talk-to-agent): runs
+    /// when the current run finishes, or on resume when paused.
+    pub pending_task: Option<String>,
     pub created_ms: i64,
     pub updated_ms: i64,
 }
@@ -142,7 +145,7 @@ impl Store {
         // Any other error (locked DB, read-only file) must surface:
         // reads map `model`/`effort` from every row, so a missing
         // column would break every session query (Opus review).
-        for col in ["model", "effort", "agent"] {
+        for col in ["model", "effort", "agent", "pending_task"] {
             if let Err(e) = conn.execute(&format!("ALTER TABLE sessions ADD COLUMN {col} TEXT"), []) {
                 if !e.to_string().contains("duplicate column name") {
                     return Err(e.to_string());
@@ -190,6 +193,7 @@ impl Store {
             model: model.map(str::to_string),
             effort: effort.map(str::to_string),
             agent: agent.map(str::to_string),
+            pending_task: None,
             created_ms: now,
             updated_ms: now,
         };
@@ -215,6 +219,7 @@ impl Store {
             model: row.get("model")?,
             effort: row.get("effort")?,
             agent: row.get("agent")?,
+            pending_task: row.get("pending_task")?,
             created_ms: row.get("created_ms")?,
             updated_ms: row.get("updated_ms")?,
         })
@@ -275,6 +280,33 @@ impl Store {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Queue (or clear) a message for the agent. Stored
+    /// redacted, like the task itself.
+    pub fn set_pending_task(&self, id: &str, task: Option<&str>) -> Result<(), String> {
+        let task = task.map(|t| redact::redact_text(t, &self.secrets));
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE sessions SET pending_task = ?2, updated_ms = ?3 WHERE id = ?1",
+            params![id, task, crate::events::now_ms()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Clear the queued message only if it is still the one the
+    /// caller read. A newer message stored meanwhile survives
+    /// (Codex review: unconditional clear erased it).
+    pub fn clear_pending_task_if(&self, id: &str, expected: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let n = conn
+            .execute(
+                "UPDATE sessions SET pending_task = NULL, updated_ms = ?3 WHERE id = ?1 AND pending_task = ?2",
+                params![id, expected, crate::events::now_ms()],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(n == 1)
     }
 
     /// Move a session to `to` only from one of `allowed_from`.
@@ -374,6 +406,7 @@ impl Store {
             model: model.map(str::to_string),
             effort: effort.map(str::to_string),
             agent: agent.map(str::to_string),
+            pending_task: None,
             created_ms: now,
             updated_ms: now,
         };
@@ -753,6 +786,38 @@ mod tests {
             .create_session_guarded("/repo", Some("web"), Some("t"), None, None, None, None)
             .unwrap();
         assert!(plain.model.is_none() && plain.effort.is_none());
+    }
+
+    #[test]
+    fn pending_task_queues_and_clears() {
+        let store = Store::in_memory().unwrap();
+        let s = store
+            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), None, None, Some("muse"))
+            .unwrap();
+        assert!(s.pending_task.is_none());
+        store.set_pending_task(&s.id, Some("also check totals")).unwrap();
+        let back = store.get_session(&s.id).unwrap().unwrap();
+        assert_eq!(back.pending_task.as_deref(), Some("also check totals"));
+        store.set_pending_task(&s.id, None).unwrap();
+        assert!(store.get_session(&s.id).unwrap().unwrap().pending_task.is_none());
+    }
+
+    #[test]
+    fn clear_pending_task_if_keeps_a_newer_message() {
+        let store = Store::in_memory().unwrap();
+        let s = store
+            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), None, None, Some("muse"))
+            .unwrap();
+        store.set_pending_task(&s.id, Some("first")).unwrap();
+        store.set_pending_task(&s.id, Some("second")).unwrap();
+        // Taking "first" must fail and keep "second" queued.
+        assert!(!store.clear_pending_task_if(&s.id, "first").unwrap());
+        assert_eq!(
+            store.get_session(&s.id).unwrap().unwrap().pending_task.as_deref(),
+            Some("second")
+        );
+        assert!(store.clear_pending_task_if(&s.id, "second").unwrap());
+        assert!(store.get_session(&s.id).unwrap().unwrap().pending_task.is_none());
     }
 
     #[test]

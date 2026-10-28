@@ -82,6 +82,14 @@ test("harbor bar journey: tokens, create, cap, pause, archive", async ({ page })
   }
   await expect(page.locator("#tokens .token")).toHaveCount(3);
 
+  // The map follows the quest just created: its ship docks at
+  // that quest's island before any file event exists.
+  const docked = await page.evaluate((island) => {
+    const c = (window as unknown as { __city: { view: { shipIsland: string | null; sessionId: string }; city: { shipVisible: boolean } } }).__city;
+    return c.view.shipIsland === island && c.city.shipVisible;
+  }, islandB);
+  expect(docked).toBe(true);
+
   // Watch-only quests do not count toward the server cap (only
   // spawned working quests with worktrees do): create stays open.
   // The cap rule itself is unit-tested in bar.test.ts.
@@ -101,6 +109,10 @@ test("harbor bar journey: tokens, create, cap, pause, archive", async ({ page })
   // Pause and resume the selected quest from the quest log.
   await page.locator("#act-pause").click();
   await expect(page.locator("#detail-state")).toContainText("paused");
+  // The agent feed shows the quest's real event lines, and a
+  // watch-only quest offers no message box (no agent runs).
+  await expect(page.locator("#agent-feed")).toContainText("Session paused.");
+  await expect(page.locator("#msg-row")).toBeHidden();
   await page.locator("#act-resume").click();
   await expect(page.locator("#detail-state")).toContainText("working");
 

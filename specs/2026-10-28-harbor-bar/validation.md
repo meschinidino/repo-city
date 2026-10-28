@@ -74,3 +74,21 @@ watcher-only (spawn=false); no live Claude run is claimed.
   the agent process, not its process group.
 - Gates: Vitest 80, tsc clean, Playwright 5, cargo tests
   pass, clippy clean. PR #18 stays open for owner judgement.
+
+## Ship dock, feed, talk-to-agent (2026-10-28, later still)
+
+- Owner round: Wonder Full model, ship dock on quest start,
+  agent reasoning and replies visible, a way to talk to the
+  agent. All five built.
+- Live proof: queued message auto-ran after the first run
+  finished (real Muse, API-driven) and wrote its file.
+  Wonder Full: catalog id real, this account lacks access —
+  the CLI refusal shows as the failure reason.
+- Reasoning honesty: Muse streams carry no reasoning text
+  (token count only); this account's Claude runs emitted no
+  thinking blocks either. The mapping is unit-tested against
+  the documented block shape; no live reasoning line seen yet.
+- Cross review by Codex (Opus at its limit; it still owes
+  this diff a pass): 4 P1 races fixed, listed in CHANGELOG.
+- Gates: Vitest 83, tsc clean, Playwright 5, cargo pass,
+  clippy clean. PR #18 stays open for owner judgement.

@@ -5,7 +5,7 @@ import { occlusion } from "./map/placement";
 import { PASS } from "./map/checks";
 import { layoutCity } from "./city/layoutCity";
 import { CityView } from "./city/renderCity";
-import { connectEvents, createSession, fetchExtraction, fetchReport, loadFailureText, stopSession, type SessionInfo } from "./city/live";
+import { connectEvents, createSession, fetchExtraction, fetchReport, fetchSessionEvents, loadFailureText, stopSession, type SessionInfo } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
 import { HarborBar } from "./city/bar";
 import type { SessionInfo as BarSession } from "./city/live";
@@ -115,6 +115,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     onShowReport: (s) => void showReport(s),
     onTargetPicked: (id) => city.selectIsland(id),
     onSessionsChanged: () => {},
+    onFollow: (s) => void follow(s),
   });
   city.onCanvasClick = (sx, sy) => {
     const id = city.islandAtScreen(sx, sy);
@@ -157,6 +158,39 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   // ship has no home: it stays off-screen until a real event places
   // it. Drawing it at the biggest island would invent a location.
   let view: SessionView = initialView(session.id, session.island_id);
+  // The quest the map follows: the primary session until the
+  // user picks another in the bar. Stop & report acts on this
+  // quest, never silently on the primary (Codex review).
+  let followed: BarSession = session;
+  let followGen = 0;
+  let replayBuffer: { id: string; events: StoredEvent[] } | null = null;
+  const follow = async (target: BarSession | null) => {
+    const quest = target ?? session;
+    followed = quest;
+    const gen = ++followGen;
+    view = initialView(quest.id, quest.island_id);
+    exposed.view = view;
+    refresh();
+    // Live events for this quest buffer while its log replays,
+    // then merge in seq order (the reducer drops duplicates),
+    // so no early history is lost to a fast live event.
+    replayBuffer = { id: quest.id, events: [] };
+    try {
+      const events = await fetchSessionEvents(server, quest.id);
+      if (gen !== followGen) return; // a newer pick owns the map
+      for (const event of events) view = applyEvent(view, event, layout.fileToIsland);
+    } catch {
+      // No replay available: live events still land on the
+      // followed quest; nothing is invented meanwhile.
+    }
+    if (gen !== followGen) return;
+    const buffered = replayBuffer?.id === quest.id ? replayBuffer.events : [];
+    replayBuffer = null;
+    for (const event of buffered.sort((a, b) => a.seq - b.seq)) {
+      view = applyEvent(view, event, layout.fileToIsland);
+    }
+    refresh();
+  };
   const exposed = { layout, view, session, report: null as unknown, city };
   (window as unknown as { __city: unknown }).__city = exposed;
   const droppedNote =
@@ -261,11 +295,16 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
       lastEventId,
       (event: StoredEvent) => {
         lastEventId = Math.max(lastEventId, event.id);
+        if (replayBuffer && event.session_id === replayBuffer.id) {
+          replayBuffer.events.push(event);
+          return;
+        }
         const before = view;
         view = applyEvent(view, event, layout.fileToIsland);
         if (view !== before) {
           refresh();
-          if (event.type === "session_finished") { void showReport(); void bar.refresh(); }
+          if (event.type === "session_finished" && event.session_id === session.id) { void showReport(); void bar.refresh(); }
+          else if (event.type === "session_finished") { void bar.refresh(); }
         }
       },
       (state) => {
@@ -293,13 +332,13 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   controls.style.display = "flex";
   document.getElementById("stop-report")!.addEventListener("click", async () => {
     try {
-      await stopSession(server, session.id);
+      await stopSession(server, followed.id);
     } catch (e) {
       status.classList.add("fail");
       refresh(` · stop failed: ${(e as Error).message} (this click stopped nothing)`);
       return;
     }
-    await showReport();
+    await showReport(followed);
     void bar.refresh();
     refresh();
   });

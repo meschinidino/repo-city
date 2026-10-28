@@ -16,6 +16,7 @@ export interface SessionInfo {
   model: string | null;
   effort: string | null;
   agent: string | null;
+  pending_task: string | null;
   cli_session_id: string | null;
   created_ms: number;
   updated_ms: number;
@@ -136,6 +137,24 @@ export async function fetchSessions(server: string): Promise<SessionInfo[]> {
 }
 
 export type SessionAction = "pause" | "resume" | "stop" | "archive" | "follow-up";
+
+/** All stored events for one session, in order. */
+export async function fetchSessionEvents(server: string, sessionId: string): Promise<StoredEvent[]> {
+  assertHttpServer(server);
+  const res = await fetched(`${server}/api/sessions/${sessionId}/events`);
+  return (await jsonOrThrow(res)) as StoredEvent[];
+}
+
+/** Queue a message for a working or paused quest's agent. It
+ * runs when the current run ends, or on resume. */
+export async function sendMessage(server: string, sessionId: string, task: string): Promise<SessionInfo> {
+  const res = await fetched(`${server}/api/sessions/${sessionId}/message`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-repo-city": "1" },
+    body: JSON.stringify({ task }),
+  });
+  return (await jsonOrThrow(res)) as SessionInfo;
+}
 
 /** One lifecycle move on the T5 routes. Returns the session as the
  * server now holds it. A refusal (409/404) throws LiveError. */

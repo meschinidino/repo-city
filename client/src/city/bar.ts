@@ -1,15 +1,19 @@
 // Harbor bar (T12, variant A): the bottom command bar, its agent
 // tokens, and the quest log above it. State comes from the server
 // (T5 routes) through live.ts; nothing here invents a session or a
-// state. The map's ship/lights still follow the primary session in
-// main.ts; this module owns the bar's own list and forms.
+// state. The map follows the quest the user picks here (main.ts
+// owns the follow switch); this module owns the bar's own list
+// and forms.
 
 import {
   createSession,
+  fetchSessionEvents,
   fetchSessions,
+  sendMessage,
   sessionAction,
   type SessionInfo,
 } from "./live";
+import type { StoredEvent } from "../events/types";
 
 export const MAX_ACTIVE_QUESTS = 3;
 
@@ -77,6 +81,21 @@ export interface HarborDeps {
   onTargetPicked: (islandId: string | null) => void;
   /** Sessions changed; main may refresh its status line. */
   onSessionsChanged: (sessions: SessionInfo[]) => void;
+  /** The map should follow this quest (null: back to the
+   * primary session). Called on token pick and on create. */
+  onFollow?: (s: SessionInfo | null) => void;
+}
+
+/** Feed lines for the quest detail: the agent's replies and,
+ * when the stream carries it, its reasoning. File touches and
+ * lifecycle records are not feed lines; the map shows those. */
+export function feedLines(events: readonly StoredEvent[]): { kind: "msg" | "reason"; text: string }[] {
+  const lines: { kind: "msg" | "reason"; text: string }[] = [];
+  for (const e of events) {
+    if (e.type === "agent_message") lines.push({ kind: "msg", text: e.text });
+    else if (e.type === "agent_reasoning") lines.push({ kind: "reason", text: e.text });
+  }
+  return lines.slice(-30);
 }
 
 function el<T extends HTMLElement>(id: string): T {
@@ -107,6 +126,7 @@ export const AGENT_CHOICES: Record<string, { models: [string, string][]; efforts
       ["", "Default model"],
       ["muse-spark-1.3", "Muse Spark 1.3"],
       ["muse-wonder-1.0", "Muse Wonder 1.0"],
+      ["muse-wonder-1.0-full", "Muse Wonder 1.0 Full"],
     ],
     efforts: [
       ["", "Default effort"],
@@ -181,6 +201,7 @@ export class HarborBar {
       el(id).addEventListener("click", () => void this.act(action));
     }
     el("act-follow").addEventListener("click", () => void this.followUp());
+    el("act-msg").addEventListener("click", () => void this.sendQueued());
     el("act-report").addEventListener("click", () => {
       const s = this.selected();
       if (s) this.deps.onShowReport(s);
@@ -258,6 +279,7 @@ export class HarborBar {
       b.title = s.task ?? "";
       b.addEventListener("click", () => {
         this.selectedId = s.id === this.selectedId ? null : s.id;
+        this.deps.onFollow?.(this.selectedId ? s : null);
         this.render();
         this.toggleLog(this.selectedId !== null || this.logOpen);
       });
@@ -298,6 +320,16 @@ export class HarborBar {
     el("detail-title").textContent = s.task ?? "Untitled quest";
     const chosen = [agentLabel(s), s.model, s.effort].filter(Boolean).join(" · ");
     el("detail-state").textContent = `${this.islandName(s.island_id)} — ${stateText(s.state)}${chosen ? ` · ${chosen}` : ""}`;
+    const canMessage = s.worktree_path !== null && (s.state === "working" || s.state === "paused");
+    el("msg-row").style.display = canMessage ? "" : "none";
+    const msgNote = el("msg-note");
+    if (s.pending_task) {
+      msgNote.textContent = `Queued: "${s.pending_task}" — runs ${s.state === "paused" ? "on resume" : "when this run ends"}.`;
+      msgNote.style.display = "block";
+    } else {
+      msgNote.style.display = "none";
+    }
+    void this.loadFeed(s);
     const allowed = actionsFor(s);
     for (const [id, action] of [
       ["act-pause", "pause"],
@@ -308,6 +340,54 @@ export class HarborBar {
       ["act-report", "report"],
     ] as const) {
       el(id).style.display = allowed.includes(action) ? "" : "none";
+    }
+  }
+
+  private feedSeq = 0;
+
+  /** Replies and reasoning for the picked quest, from its real
+   * event log. Muse streams carry no reasoning text (only a
+   * token count), so a Muse feed shows replies only — nothing
+   * is invented to fill it. */
+  private async loadFeed(s: SessionInfo): Promise<void> {
+    const seq = ++this.feedSeq;
+    const box = el("agent-feed");
+    box.innerHTML = "";
+    box.style.display = "none";
+    try {
+      const events = await fetchSessionEvents(this.deps.server, s.id);
+      if (seq !== this.feedSeq || this.selectedId !== s.id) return;
+      const lines = feedLines(events);
+      box.innerHTML = "";
+      for (const line of lines) {
+        const div = document.createElement("div");
+        div.className = line.kind === "reason" ? "feed-reason" : "feed-msg";
+        div.textContent = line.text;
+        box.appendChild(div);
+      }
+      box.style.display = lines.length ? "block" : "none";
+      box.scrollTop = box.scrollHeight;
+    } catch {
+      if (seq === this.feedSeq) box.style.display = "none";
+    }
+  }
+
+  private async sendQueued(): Promise<void> {
+    const s = this.selected();
+    if (!s) return;
+    const input = el<HTMLInputElement>("msg-task");
+    const task = input.value.trim();
+    if (!task) {
+      this.showError("Write the message first.");
+      return;
+    }
+    try {
+      await sendMessage(this.deps.server, s.id, task);
+      input.value = "";
+      this.showError("");
+      await this.refresh();
+    } catch (e) {
+      this.showError(`The message did not queue: ${(e as Error).message}`);
     }
   }
 
@@ -339,6 +419,7 @@ export class HarborBar {
         agent: spawn ? (agentKind === "muse" ? "muse" : "claude") : undefined,
       });
       this.selectedId = s.id;
+      this.deps.onFollow?.(s);
       el<HTMLInputElement>("quest-task").value = "";
       this.showError("");
       await this.refresh();
