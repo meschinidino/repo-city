@@ -1,0 +1,195 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Island shapes — study 2</title>
+<style>
+  body { margin:0; background:#4f98a6; font-family: Georgia, serif; }
+  canvas { display:block; margin:0 auto; }
+</style>
+<canvas id="c" width="1500" height="1020"></canvas>
+<script>
+const ctx = document.getElementById("c").getContext("2d");
+const TW = 46, TH = 23;
+
+// Seeded value noise: smooth random field, 3 octaves (fBm).
+function makeNoise(seed) {
+  const hash = (x, y) => {
+    let n = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453;
+    return n - Math.floor(n);
+  };
+  const smooth = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    return hash(xi, yi) * (1 - u) * (1 - v) + hash(xi + 1, yi) * u * (1 - v)
+         + hash(xi, yi + 1) * (1 - u) * v + hash(xi + 1, yi + 1) * u * v;
+  };
+  return (x, y) => 0.55 * smooth(x, y) + 0.30 * smooth(x * 2.1, y * 2.1) + 0.15 * smooth(x * 4.3, y * 4.3);
+}
+
+// Land mask the way island generators do it:
+// height = noise - radial falloff; land where height > 0;
+// then 2 majority-smoothing passes; keep the largest landmass.
+function organicMask(w, h, seed) {
+  const noise = makeNoise(seed);
+  const cx = (w - 1) / 2, cy = (h - 1) / 2;
+  let cells = new Set();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const d = Math.sqrt(((x - cx) / (w * 0.62)) ** 2 + ((y - cy) / (h * 0.62)) ** 2);
+    const height = noise(x * 0.16, y * 0.16) - d * 0.52;
+    if (height > 0.02) cells.add(x + "," + y);
+  }
+  const has = (s, x, y) => s.has(x + "," + y);
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Set();
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (has(cells, x + dx, y + dy)) n++;
+      if (has(cells, x, y) ? n >= 4 : n >= 5) next.add(x + "," + y);
+    }
+    cells = next;
+  }
+  // Largest connected landmass only; no stray rocks.
+  const seen = new Set(); let best = new Set();
+  for (const k of cells) {
+    if (seen.has(k)) continue;
+    const group = new Set([k]); const stack = [k]; seen.add(k);
+    while (stack.length) {
+      const [x, y] = stack.pop().split(",").map(Number);
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nk = (x + dx) + "," + (y + dy);
+        if (cells.has(nk) && !seen.has(nk)) { seen.add(nk); group.add(nk); stack.push(nk); }
+      }
+    }
+    if (group.size > best.size) best = group;
+  }
+  // Fill interior holes (lakes): flood the water from the border;
+  // water the flood cannot reach is inside the island, make it land.
+  const water = new Set();
+  const stack = [];
+  for (let x = 0; x < w; x++) { stack.push(x + ",0"); stack.push(x + "," + (h - 1)); }
+  for (let y = 0; y < h; y++) { stack.push("0," + y); stack.push((w - 1) + "," + y); }
+  while (stack.length) {
+    const k = stack.pop();
+    if (water.has(k) || best.has(k)) continue;
+    water.add(k);
+    const [x, y] = k.split(",").map(Number);
+    if (x > 0) stack.push((x - 1) + "," + y);
+    if (x < w - 1) stack.push((x + 1) + "," + y);
+    if (y > 0) stack.push(x + "," + (y - 1));
+    if (y < h - 1) stack.push(x + "," + (y + 1));
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const k = x + "," + y;
+    if (!water.has(k)) best.add(k);
+  }
+  best.add(Math.round(cx) + "," + Math.round(cy));
+  return best;
+}
+
+function squareMask(w, h) {
+  const cells = new Set();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) cells.add(x + "," + y);
+  return cells;
+}
+
+// Elevation = distance to water, capped. Inner land sits higher:
+// cliffs appear where the height drops at the edge.
+function elevations(mask) {
+  const dist = new Map();
+  for (const k of mask) dist.set(k, 99);
+  let frontier = [...mask].filter(k => {
+    const [x, y] = k.split(",").map(Number);
+    return !mask.has((x+1)+","+y) || !mask.has((x-1)+","+y) || !mask.has(x+","+(y+1)) || !mask.has(x+","+(y-1));
+  });
+  for (const k of frontier) dist.set(k, 0);
+  let d = 0;
+  while (frontier.length && d < 3) {
+    const next = [];
+    for (const k of frontier) {
+      const [x, y] = k.split(",").map(Number);
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nk = (x + dx) + "," + (y + dy);
+        if (dist.get(nk) === 99) { dist.set(nk, d + 1); next.push(nk); }
+      }
+    }
+    frontier = next; d++;
+  }
+  return dist;
+}
+
+function iso(x, y, ox, oy) { return [ox + (x - y) * TW / 2, oy + (x + y) * TH / 2]; }
+function diamond(cx, cy, w, h, fill) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - h / 2); ctx.lineTo(cx + w / 2, cy); ctx.lineTo(cx, cy + h / 2); ctx.lineTo(cx - w / 2, cy);
+  ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+}
+
+function drawIsland(ox, oy, mask, seed) {
+  const has = (x, y) => mask.has(x + "," + y);
+  const elev = elevations(mask);
+  // Shallow halo follows the outline: grown mask, not the bounding box.
+  ctx.globalAlpha = 0.32;
+  const grown = new Set();
+  for (const k of mask) {
+    const [x, y] = k.split(",").map(Number);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) grown.add((x + dx) + "," + (y + dy));
+  }
+  for (const k of grown) {
+    const [x, y] = k.split(",").map(Number);
+    const [px, py] = iso(x, y, ox, oy);
+    diamond(px, py + 5, TW * 1.18, TH * 1.18, "#8fd8cf");
+  }
+  ctx.globalAlpha = 1;
+  const sorted = [...mask].map(k => k.split(",").map(Number)).sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
+  for (const [x, y] of sorted) {
+    const e = elev.get(x + "," + y) || 0;
+    const lift = 0;
+    const [px, py0] = iso(x, y, ox, oy);
+    const py = py0 - lift;
+    const shore = e === 0;
+    // Cliff faces on south and east edges, height from own elevation.
+    if (!has(x, y + 1)) {
+      ctx.beginPath();
+      ctx.moveTo(px - TW/2, py); ctx.lineTo(px, py + TH/2); ctx.lineTo(px, py + TH/2 + 12 + e * 6); ctx.lineTo(px - TW/2, py + 12 + e * 6);
+      ctx.closePath(); ctx.fillStyle = "#8a6a44"; ctx.fill();
+    }
+    if (!has(x + 1, y)) {
+      ctx.beginPath();
+      ctx.moveTo(px + TW/2, py); ctx.lineTo(px, py + TH/2); ctx.lineTo(px, py + TH/2 + 12 + e * 6); ctx.lineTo(px + TW/2, py + 12 + e * 6);
+      ctx.closePath(); ctx.fillStyle = "#75572f"; ctx.fill();
+    }
+    diamond(px, py, TW, TH, shore ? "#e8cf92" : (e >= 2 ? "#8fce6d" : "#79c25f"));
+    if (shore) diamond(px, py, TW * 0.70, TH * 0.70, "#79c25f");
+  }
+  // Houses on high inner cells only.
+  let s = seed * 31 + 7;
+  const rnd = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (const [x, y] of sorted) {
+    if ((elev.get(x + "," + y) || 0) >= 2 && rnd() < 0.35) {
+      const [px, py0] = iso(x, y, ox, oy);
+      const py = py0;
+      ctx.fillStyle = "#c65a3a"; ctx.fillRect(px - 6, py - 12, 12, 9);
+      ctx.fillStyle = "#7a3b28"; ctx.fillRect(px - 7, py - 15, 14, 4);
+    }
+  }
+}
+
+function label(x, y, text) {
+  ctx.font = "700 21px Georgia"; ctx.textAlign = "center";
+  ctx.lineWidth = 4; ctx.strokeStyle = "rgba(10,40,45,.65)";
+  ctx.strokeText(text, x, y); ctx.fillStyle = "#fff"; ctx.fillText(text, x, y);
+}
+
+drawIsland(300, 100, squareMask(9, 9), 1);
+label(300, 350, "BEFORE — square (current)");
+drawIsland(760, 100, organicMask(13, 12, 11), 11);
+label(760, 350, "A — seed 11");
+drawIsland(1210, 100, organicMask(13, 12, 23), 23);
+label(1210, 350, "B — seed 23");
+drawIsland(300, 540, organicMask(14, 12, 37), 37);
+label(300, 810, "C — seed 37");
+drawIsland(760, 540, organicMask(12, 13, 41), 41);
+label(760, 810, "D — seed 41");
+drawIsland(1210, 540, organicMask(14, 12, 53), 53);
+label(1210, 810, "E — seed 53");
+label(750, 885, "Noise + falloff, smoothed, largest landmass. Elevation from distance to water. Halo follows the outline.");
+</script>

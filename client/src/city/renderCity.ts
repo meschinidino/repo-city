@@ -1,9 +1,14 @@
-import { Application, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import { Application, Assets, Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
+import bridgeAUrl from "../../../assets/sprites/bridge-a.png";
+import bridgeBUrl from "../../../assets/sprites/bridge-b.png";
+import glow0Url from "../../../assets/sprites/glow-0.png";
+import glow1Url from "../../../assets/sprites/glow-1.png";
+import glow2Url from "../../../assets/sprites/glow-2.png";
 import type { World } from "../map/pipeline";
-import { PLAIN_GRASS_INDEX } from "../map/coast";
+import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeChevron, bridgeSpan, cityBridgeDeck, cityProjector, PLOT, plotDepth, type CityLayout } from "./layoutCity";
+import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, waterSegments, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -32,6 +37,24 @@ export class CityView {
   private root!: Container;
   private cam = { scale: 1, x: 0, y: 0 };
   private fitScale = 1;
+  private bridgeGfx!: Graphics;
+  private bridgeSprites = new Container();
+  private bridgeTexA: Texture | null = null;
+  private bridgeTexB: Texture | null = null;
+  private glowLayer = new Container();
+  private glowTexs: Texture[] = [];
+  private glowSprites: { spr: Sprite; points: { gx: number; gy: number }[]; cum: number[]; phase: number }[] = [];
+  private landCells = new Set<string>();
+  private zoomLevel: "map" | "island" = "map";
+  private bridgePairs: {
+    count: number;
+    span: [{ gx: number; gy: number }, { gx: number; gy: number }];
+    deck: ReturnType<typeof cityBridgeDeck>;
+    points: { gx: number; gy: number }[];
+    segs: [{ gx: number; gy: number }, { gx: number; gy: number }][];
+    clear: boolean;
+    dirs: { gx: number; gy: number }[][];
+  }[] = [];
 
   constructor(world: World, layout: CityLayout) {
     this.world = world;
@@ -70,6 +93,129 @@ export class CityView {
   private applyCam(): void {
     this.root.position.set(this.cam.x, this.cam.y);
     this.root.scale.set(this.cam.scale);
+    // D-zoom: past 2x fit the map becomes the island view. Bridge
+    // treatment and direction pulses follow the level.
+    const level = this.cam.scale > this.fitScale * 2 ? "island" : "map";
+    if (level !== this.zoomLevel) {
+      this.zoomLevel = level;
+      if (this.bridgeGfx) this.drawBridges();
+    }
+  }
+
+  /** Screen legs for a span, in grid points. Straight when the
+   * span already runs near a map axis. Else two legs along the two
+   * map axes (elbow in grid space). No leg is ever steep on
+   * screen, so no deck reads as falling. */
+  private spanLegs(span: [{ gx: number; gy: number }, { gx: number; gy: number }]): [{ gx: number; gy: number }, { gx: number; gy: number }][] {
+    const [a, b] = span;
+    const ax = Math.abs(b.gx - a.gx);
+    const ay = Math.abs(b.gy - a.gy);
+    if (Math.min(ax, ay) <= Math.max(ax, ay) * 0.35) return [[a, b]];
+    const elbow = ax >= ay ? { gx: b.gx, gy: a.gy } : { gx: a.gx, gy: b.gy };
+    return [[a, elbow], [elbow, b]];
+  }
+
+  /** One bridge deck between two screen points. Two direction
+   * tiles (owner: new assets for different directions): A for
+   * legs that run up-right on screen, B for legs that run
+   * down-right, each drawn in its own perspective. The turn is
+   * kept within half a circle of flat, so the rails always stand
+   * up: a deck that points left is drawn flipped, never upside
+   * down. */
+  private addDeck(ax: number, ay: number, bx: number, by: number, targetH: number, alpha: number): void {
+    const len = Math.hypot(bx - ax, by - ay);
+    if (len < 4) return;
+    let rot = Math.atan2(by - ay, bx - ax);
+    if (rot > Math.PI / 2) rot -= Math.PI;
+    else if (rot < -Math.PI / 2) rot += Math.PI;
+    const tex = (rot < 0 ? this.bridgeTexA : this.bridgeTexB) ?? this.bridgeTexA ?? this.bridgeTexB;
+    if (!tex) return;
+    const ts = new TilingSprite({ texture: tex, width: len * 1.04, height: targetH });
+    ts.anchor.set(0.5);
+    ts.position.set((ax + bx) / 2, (ay + by) / 2);
+    ts.rotation = rot;
+    const s = targetH / tex.height;
+    ts.tileScale.set(s, s);
+    ts.alpha = alpha;
+    this.bridgeSprites.addChild(ts);
+  }
+
+  /** Bridges by zoom level (D-zoom): at map zoom only strong pairs
+   * (15+ imports, pinned from the GestiKo distribution: 24 of 381
+   * pairs, 41% of imports) draw, at both zooms. Weak pairs draw
+   * nothing: as lines they read as brown lines that are not
+   * bridges, and as decks they make a carpet (both owner calls).
+   * Fallback with no texture: the old deck polygon / stroke. */
+  private drawBridges(): void {
+    const g = this.bridgeGfx;
+    const proj = this.proj;
+    g.clear();
+    for (const child of this.bridgeSprites.removeChildren()) child.destroy();
+    for (const pair of this.bridgePairs) {
+      const strong = pair.count >= 15;
+      if (this.zoomLevel === "map" && !strong) continue;
+      const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
+      const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
+      if (this.bridgeTexA || this.bridgeTexB) {
+        if (!strong) continue;
+        // Harbour rule: a deck draws only when its whole path is
+        // open water (one water segment). A pair with an island
+        // in between gets no deck at all. Clipped stubs read as
+        // broken, duplicated bridges (owner call). Placement
+        // (annealPlacement) works to make strong pairs
+        // neighbours so this rule keeps most of them.
+        if (!pair.clear) continue;
+        // One deck height per import count, same in every
+        // direction. A projected width made some decks thin.
+        // Only water segments draw: no deck runs through an
+        // island that sits between the pair.
+        const targetH = Math.min(62, 44 + 3 * Math.log2(pair.count + 1));
+        for (const [p, q] of pair.segs) {
+          const [px, py] = proj.project(p.gx, p.gy);
+          const [qx, qy] = proj.project(q.gx, q.gy);
+          this.addDeck(px, py, qx, qy, targetH, 1);
+        }
+      } else if (strong) {
+        const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
+        g.poly(corners);
+        g.fill({ color: 0xb98652, alpha: 0.92 });
+        const [c0, c1, c2, c3] = pair.deck.corners.map((c) => proj.project(c.gx, c.gy));
+        g.moveTo(c0[0], c0[1]); g.lineTo(c1[0], c1[1]);
+        g.moveTo(c3[0], c3[1]); g.lineTo(c2[0], c2[1]);
+        g.stroke({ color: 0x7a5432, width: 2, alpha: 0.9 });
+      } else {
+        g.moveTo(ax, ay);
+        g.lineTo(bx, by);
+        g.stroke({ color: 0xcfa06a, alpha: 0.5, width: 2 });
+      }
+    }
+  }
+
+  /** Direction glow (owner: sprite frames, not code dots): one
+   * glow sprite per import direction on a strong deck. The sprite
+   * travels the span, importer toward imported, and cycles its
+   * three frames (assets/sprites/glow-0..2.png) as it goes.
+   * Island zoom only. This is a reading aid, not an agent signal
+   * (DESIGN.md stillness rule: noted in the PR for judgement). */
+  private drawPulses(nowMs: number): void {
+    if (!this.glowLayer) return;
+    this.glowLayer.visible = this.zoomLevel === "island" && this.glowTexs.length > 0;
+    if (!this.glowLayer.visible) return;
+    const frame = Math.floor(nowMs / 160) % 3;
+    for (const glow of this.glowSprites) {
+      const t = ((nowMs / 4500) + glow.phase) % 1;
+      // Follow the deck path point by point (cum = path fractions).
+      let i = 0;
+      while (i < glow.cum.length - 2 && t > glow.cum[i + 1]) i++;
+      const lt = (t - glow.cum[i]) / Math.max(1e-6, glow.cum[i + 1] - glow.cum[i]);
+      const gx = glow.points[i].gx + (glow.points[i + 1].gx - glow.points[i].gx) * lt;
+      const gy = glow.points[i].gy + (glow.points[i + 1].gy - glow.points[i].gy) * lt;
+      const [px, py] = this.proj.project(gx, gy);
+      glow.spr.position.set(px, py);
+      // No glow over land: the path may cross an island in between.
+      glow.spr.visible = !this.landCells.has(Math.floor(gx) + "," + Math.floor(gy));
+      glow.spr.texture = this.glowTexs[(frame + Math.floor(glow.phase * 7)) % 3];
+    }
   }
 
   private fitCamera(): void {
@@ -161,90 +307,225 @@ export class CityView {
         this.applyCam();
       }
     });
-    const tileTex = Texture.from(pixelsToCanvas(this.world.tiles[PLAIN_GRASS_INDEX]));
-    const tileH = (this.world.tiles[PLAIN_GRASS_INDEX].height * TW) / TWBASE;
+    // Coast tiles (step 1 of the owner-approved order): every land
+    // cell picks its fitted tile from which neighbors are water,
+    // the spike rule in map/coast.ts. The city used plain grass on
+    // every cell before this; the shore now comes from the sheet.
+    const tileTexByIndex = this.world.tiles.map((t) => Texture.from(pixelsToCanvas(t)));
+    const tileHByIndex = this.world.tiles.map((t) => (t.height * TW) / TWBASE);
+    const landSet = new Set<string>();
+    for (const isl of this.layout.islands) for (const k of isl.cells) landSet.add(k);
+    this.landCells = landSet;
+    const cityLand = (gx: number, gy: number): boolean => landSet.has(gx + "," + gy);
 
     interface Item { depth: number; kind: number; node: Container }
     const items: Item[] = [];
 
-    // island ground: plain-grass fitted tiles on every island cell
+    // island ground: coast-fitted tiles on every land cell of the
+    // island's organic outline (layoutCity.islandShape)
     for (const isl of this.layout.islands) {
-      for (let gy = isl.y; gy < isl.y + isl.rows * PLOT; gy++) {
-        for (let gx = isl.x; gx < isl.x + isl.cols * PLOT; gx++) {
-          const s = new Sprite(tileTex);
-          const [tx, ty] = proj.project(gx, gy);
-          s.position.set(tx - TW / 2, ty);
-          s.width = TW;
-          s.height = tileH;
-          const c = new Container();
-          c.addChild(s);
-          items.push({ depth: gx + gy, kind: 0, node: c });
+      const cells = [...isl.cells]
+        .map((k) => k.split(",").map(Number) as [number, number])
+        .sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
+      for (const [gx, gy] of cells) {
+        const ti = coastTileIndexWith(cityLand, gx, gy);
+        const s = new Sprite(tileTexByIndex[ti]);
+        const [tx, ty] = proj.project(gx, gy);
+        s.position.set(tx - TW / 2, ty);
+        s.width = TW;
+        s.height = tileHByIndex[ti];
+        const c = new Container();
+        c.addChild(s);
+        items.push({ depth: gx + gy, kind: 0, node: c });
+      }
+    }
+
+    // shoreline: shallow halo under every island (DESIGN.md:
+    // shallow water is drawn in code under the tiles). The halo
+    // follows the island outline: the land mask grown by one cell.
+    // The sand edge itself comes from the coast tiles.
+    const shore = new Graphics();
+    for (const isl of this.layout.islands) {
+      const grown = new Set<string>();
+      for (const k of isl.cells) {
+        const [gx, gy] = k.split(",").map(Number);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) grown.add(gx + dx + "," + (gy + dy));
+      }
+      for (const k of grown) {
+        const [gx, gy] = k.split(",").map(Number);
+        const [tx, ty] = proj.project(gx, gy);
+        shore.poly([tx, ty - TW / 4, tx + TW / 2, ty, tx, ty + TW / 4, tx - TW / 2, ty]);
+        shore.fill({ color: 0x8fd8cf, alpha: 0.28 });
+      }
+    }
+    // Cliffs (step 2, owner fix): not every shore is a cliff. A
+    // front edge gets a rock face only where the land behind it is
+    // thick (distance-to-water of the cell behind the edge >= 2):
+    // headlands get cliffs, thin shores stay beach. Face height
+    // grows with that thickness, capped. Drawn in code like the
+    // sea and bridges; the coast sheet holds no cliff tiles.
+    const landDist = new Map<string, number>();
+    {
+      let frontier: string[] = [];
+      for (const k of landSet) {
+        const [gx, gy] = k.split(",").map(Number);
+        if (!cityLand(gx + 1, gy) || !cityLand(gx - 1, gy) || !cityLand(gx, gy + 1) || !cityLand(gx, gy - 1)) {
+          landDist.set(k, 0);
+          frontier.push(k);
+        }
+      }
+      let d = 0;
+      while (frontier.length && d < 4) {
+        const next: string[] = [];
+        for (const k of frontier) {
+          const [gx, gy] = k.split(",").map(Number);
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+            const nk = gx + dx + "," + (gy + dy);
+            if (cityLand(gx + dx, gy + dy) && !landDist.has(nk)) {
+              landDist.set(nk, d + 1);
+              next.push(nk);
+            }
+          }
+        }
+        frontier = next;
+        d++;
+      }
+    }
+    const cliffBase = TW * 0.38;
+    for (const isl of this.layout.islands) {
+      for (const key of isl.cells) {
+        const [gx, gy] = key.split(",").map(Number);
+        const [tx, ty] = proj.project(gx, gy);
+        const left: [number, number] = [tx - TW / 2, ty + TW / 4];
+        const bottom: [number, number] = [tx, ty + TW / 2];
+        const right: [number, number] = [tx + TW / 2, ty + TW / 4];
+        if (!cityLand(gx, gy + 1)) {
+          const behind = landDist.get(gx + "," + (gy - 1)) ?? 0;
+          if (behind >= 2) {
+            const cliffH = cliffBase * (0.7 + 0.2 * Math.min(behind, 3));
+            shore.poly([left[0], left[1], bottom[0], bottom[1], bottom[0], bottom[1] + cliffH, left[0], left[1] + cliffH]);
+            shore.fill({ color: 0x7d7468, alpha: 1 });
+          }
+        }
+        if (!cityLand(gx + 1, gy)) {
+          const behind = landDist.get(gx - 1 + "," + gy) ?? 0;
+          if (behind >= 2) {
+            const cliffH = cliffBase * (0.7 + 0.2 * Math.min(behind, 3));
+            shore.poly([bottom[0], bottom[1], right[0], right[1], right[0], right[1] + cliffH, bottom[0], bottom[1] + cliffH]);
+            shore.fill({ color: 0x6b6156, alpha: 1 });
+          }
         }
       }
     }
-
-    // shoreline: shallow halo and a sand edge under every island
-    // (DESIGN.md: shallow water is drawn in code under the tiles)
-    const shore = new Graphics();
-    for (const isl of this.layout.islands) {
-      const w = isl.cols * PLOT;
-      const h = isl.rows * PLOT;
-      const ring = (e: number): number[] => [
-        ...proj.project(isl.x - e, isl.y - e),
-        ...proj.project(isl.x + w + e, isl.y - e),
-        ...proj.project(isl.x + w + e, isl.y + h + e),
-        ...proj.project(isl.x - e, isl.y + h + e),
-      ];
-      shore.poly(ring(1.3));
-      shore.fill({ color: 0x8fd8cf, alpha: 0.4 });
-      shore.poly(ring(0.45));
-      shore.fill({ color: 0xe8cf92, alpha: 0.9 });
-    }
     root.addChild(shore);
 
-    // Bridges at city scale are shore-to-shore strokes (PR #12),
-    // one per unordered island pair at the wider direction's width,
-    // with a lane-gold chevron per direction drawn later. Full deck
-    // bridges (the test map's) were tried in this PR and reverted
-    // by owner call: 381 decks carpeted the sea and the archipelago
-    // stopped reading as islands in open water. Deck treatment at
-    // island zoom is a step-4 (T12) zoom-semantics question.
+    // Bridge data: one entry per unordered island pair, with one
+    // oriented span per import direction for the pulses.
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
-    const bridges = new Graphics();
-    const deckList: { span: [{ gx: number; gy: number }, { gx: number; gy: number }]; deck: ReturnType<typeof cityBridgeDeck> }[] = [];
-    const pairs = new Map<string, { count: number; dirs: CityLayout["bridges"] }>();
-    for (const br of this.layout.bridges) {
-      const key = [br.from, br.to].sort().join("|");
-      const pair = pairs.get(key) ?? { count: 0, dirs: [] };
-      pair.count = Math.max(pair.count, br.count);
-      pair.dirs.push(br);
-      pairs.set(key, pair);
-    }
-    for (const pair of pairs.values()) {
-      const br = pair.dirs[0];
-      const a = byId.get(br.from);
-      const b = byId.get(br.to);
-      if (!a || !b) continue;
-      const span = bridgeSpan(
-        { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT },
-        { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
-      );
-      if (!span) continue;
-      const deck = cityBridgeDeck(span, pair.count);
-      const [ax, ay] = proj.project(span[0].gx, span[0].gy);
-      const [bx, by] = proj.project(span[1].gx, span[1].gy);
-      bridges.moveTo(ax, ay);
-      bridges.lineTo(bx, by);
-      bridges.stroke({ color: 0xb98652, alpha: 0.55, width: Math.min(6, 1.5 + Math.log2(pair.count + 1)) });
-      for (const dir of pair.dirs) {
-        deckList.push({ span: dir.from === br.from ? span : [span[1], span[0]], deck });
+    {
+      const pairs = new Map<string, { count: number; dirs: CityLayout["bridges"] }>();
+      for (const br of this.layout.bridges) {
+        const key = [br.from, br.to].sort().join("|");
+        const pair = pairs.get(key) ?? { count: 0, dirs: [] };
+        pair.count = Math.max(pair.count, br.count);
+        pair.dirs.push(br);
+        pairs.set(key, pair);
+      }
+      for (const pair of pairs.values()) {
+        const br = pair.dirs[0];
+        const a = byId.get(br.from);
+        const b = byId.get(br.to);
+        if (!a || !b) continue;
+        const rectA = { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT };
+        const rectB = { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT };
+        // Straight along one map axis when the rectangles overlap
+        // on the other axis; the bent span is the fallback.
+        const axis = bridgeAxisLegs(rectA, rectB);
+        let span: [{ gx: number; gy: number }, { gx: number; gy: number }];
+        let points: { gx: number; gy: number }[];
+        if (axis) {
+          span = axis;
+          points = [axis[0], axis[1]];
+        } else {
+          const bent = bridgeSpan(rectA, rectB);
+          if (!bent) continue;
+          span = bent;
+          const legs = this.spanLegs(bent);
+          points = legs.length === 2 ? [legs[0][0], legs[0][1], legs[1][1]] : [bent[0], bent[1]];
+        }
+        // True shore points: walk each end toward its island
+        // until it hits a real land cell, then step 0.25 cells
+        // back into the water. Rectangle ends made decks float
+        // in open water or run under the grass (owner calls).
+        // Decks bury 0.3 cells past the shore; the glow keeps
+        // the shore points, so it never runs on grass.
+        const shoreEnd = (
+          p: { gx: number; gy: number },
+          other: { gx: number; gy: number },
+          cells: Set<string>,
+        ) => {
+          const dx = p.gx - other.gx;
+          const dy = p.gy - other.gy;
+          const l = Math.hypot(dx, dy) || 1;
+          const ux = dx / l;
+          const uy = dy / l;
+          for (let s = -2; s <= 3; s += 0.1) {
+            const gx = p.gx + ux * s;
+            const gy = p.gy + uy * s;
+            if (cells.has(Math.floor(gx) + "," + Math.floor(gy))) {
+              return { gx: gx - ux * 0.25, gy: gy - uy * 0.25 };
+            }
+          }
+          return p;
+        };
+        const shorePoints = [...points];
+        shorePoints[0] = shoreEnd(points[0], points[1], a.cells);
+        shorePoints[shorePoints.length - 1] = shoreEnd(points[points.length - 1], points[points.length - 2], b.cells);
+        const out = (p: { gx: number; gy: number }, q: { gx: number; gy: number }) => {
+          const dx = p.gx - q.gx;
+          const dy = p.gy - q.gy;
+          const l = Math.hypot(dx, dy) || 1;
+          return { gx: p.gx + (dx / l) * 0.3, gy: p.gy + (dy / l) * 0.3 };
+        };
+        const deckPoints = shorePoints.length === 2
+          ? [out(shorePoints[0], shorePoints[1]), out(shorePoints[1], shorePoints[0])]
+          : [out(shorePoints[0], shorePoints[1]), shorePoints[1], out(shorePoints[2], shorePoints[1])];
+        this.bridgePairs.push({
+          count: pair.count,
+          span,
+          deck: cityBridgeDeck(span, pair.count),
+          points: deckPoints,
+          segs: waterSegments(deckPoints, (gx, gy) => landSet.has(gx + "," + gy)),
+          // A bridge is a neighbour link (owner: we were stuck
+          // patching symptoms). Deck path capped at 16 cells:
+          // on GestiKo the true neighbour bridges are 2-13 cells;
+          // the two map-crossing highways are 51 and 69.
+          clear: deckPoints.reduce((n, pt, i) => (i ? n + Math.hypot(pt.gx - deckPoints[i - 1].gx, pt.gy - deckPoints[i - 1].gy) : 0), 0) <= 16
+            && deckPoints.every((_, i) => i + 1 >= deckPoints.length
+              || waterSegments([deckPoints[i], deckPoints[i + 1]], (gx, gy) => landSet.has(gx + "," + gy)).length === 1),
+          dirs: pair.dirs.map((dir) => (dir.from === br.from ? shorePoints : [...shorePoints].reverse())),
+        });
       }
     }
-    root.addChild(bridges);
+    this.bridgeTexA = (await Assets.load(bridgeAUrl).catch(() => null)) as Texture | null;
+    this.bridgeTexB = (await Assets.load(bridgeBUrl).catch(() => null)) as Texture | null;
+    this.glowTexs = ((await Promise.all([glow0Url, glow1Url, glow2Url].map((u) => Assets.load(u).catch(() => null)))).filter(Boolean) as Texture[]);
+    this.bridgeGfx = new Graphics();
+    root.addChild(this.bridgeSprites);
+    root.addChild(this.bridgeGfx);
+    this.drawBridges();
 
     // buildings, one sprite per file, placed by its plate footprint
+    const drawnTestIslets = new Set<string>();
     for (const b of this.layout.buildings) {
       if (b.building === "pennant") {
+        // A test-only islet draws one pennant for the whole island;
+        // its count is in the label. 103 flags said nothing.
+        const home = this.layout.islands.find((i) => i.id === b.islandId);
+        if (home?.testOnly) {
+          if (drawnTestIslets.has(home.id)) continue;
+          drawnTestIslets.add(home.id);
+        }
         // Test files are not buildings (DESIGN.md): a small flag on
         // a pole at the plot centre, in the island's depth order.
         const [fx, fy] = proj.project(b.gx + PLOT / 2, b.gy + PLOT / 2);
@@ -259,7 +540,10 @@ export class CityView {
         items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
         continue;
       }
-      const key = BUILDING_SPRITE[b.building] ?? "cottage";
+      let key = BUILDING_SPRITE[b.building] ?? "cottage";
+      // Cottages vary: one in three takes the slate-roof sprite,
+      // by file hash, so a village is not one stamped house.
+      if (key === "cottage" && hashSeed(b.file) % 3 === 0) key = "slate";
       const sprite = this.world.sprites.find((s) => s.key === key) ?? this.world.sprites.find((s) => s.key === "cottage");
       const texture = this.tex(key);
       if (!sprite || !texture || !sprite.plate) continue;
@@ -283,34 +567,95 @@ export class CityView {
       items.push({ depth: plotDepth(b.gx, b.gy), kind: 1, node: c });
     }
 
-    items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
-
-    // Direction chevrons last among the static layers, so a
-    // shoreline arrow is not buried under the island it points at.
-    const chevrons = new Graphics();
-    for (const { span, deck } of deckList) {
-      const ch = bridgeChevron(span, deck);
-      const tip = proj.project(ch.tip.gx, ch.tip.gy);
-      const wa = proj.project(ch.wingA.gx, ch.wingA.gy);
-      const wb = proj.project(ch.wingB.gx, ch.wingB.gy);
-      chevrons.moveTo(wa[0], wa[1]);
-      chevrons.lineTo(tip[0], tip[1]);
-      chevrons.lineTo(wb[0], wb[1]);
+    // Inland life: trees on free inner land cells. Free means no
+    // building plot and not shore (landDist >= 1). Seeded by cell,
+    // sparse, capped per island. There is no mountain sprite in
+    // the sheets; trees and the boulder are what the art holds
+    // today, so mountains wait for a sprite-pipeline sheet.
+    {
+      const treeSprite = this.world.sprites.find((s) => s.key === "tree");
+      const treeTex = this.tex("tree");
+      if (treeSprite?.plate && treeTex) {
+        const pt = treeSprite.plate;
+        const unit = Math.hypot(TW / 2, TW / 4);
+        const scale = Math.min(
+          unit / Math.hypot(pt.B[0] - pt.L[0], pt.B[1] - pt.L[1]),
+          unit / Math.hypot(pt.R[0] - pt.B[0], pt.R[1] - pt.B[1]),
+        );
+        const pcx = (pt.L[0] + pt.R[0]) / 2;
+        const pcy = (pt.L[1] + pt.R[1]) / 2;
+        const occupied = new Set<string>();
+        for (const b of this.layout.buildings) {
+          if (b.building === "pennant") occupied.add(b.gx + "," + b.gy);
+          else for (let dy = 0; dy < PLOT; dy++) for (let dx = 0; dx < PLOT; dx++) occupied.add(b.gx + dx + "," + (b.gy + dy));
+        }
+        for (const isl of this.layout.islands) {
+          let placedTrees = 0;
+          const cap = Math.max(1, Math.floor(isl.cells.size / 14));
+          for (const key of isl.cells) {
+            if (placedTrees >= cap) break;
+            if (occupied.has(key)) continue;
+            const [gx, gy] = key.split(",").map(Number);
+            if ((landDist.get(key) ?? 0) < 1) continue;
+            const h = Math.abs(Math.sin(gx * 127.1 + gy * 311.7 + isl.x * 17.3) * 43758.5453) % 1;
+            if (h > 0.16) continue;
+            const [fx, fy] = proj.project(gx + 0.5, gy + 0.5);
+            const s = new Sprite(treeTex);
+            s.width = treeSprite.width * scale;
+            s.height = treeSprite.height * scale;
+            s.position.set(fx - pcx * scale, fy - pcy * scale);
+            const c = new Container();
+            c.addChild(s);
+            items.push({ depth: gx + gy + 0.5, kind: 1, node: c });
+            placedTrees++;
+          }
+        }
+      }
     }
-    chevrons.stroke({ color: 0xffe3a3, width: Math.max(1.5, TW * 0.045), alpha: 0.95 });
-    root.addChild(chevrons);
+
+    items.sort((a, b) => a.depth - b.depth || a.kind - b.kind).forEach((it) => root.addChild(it.node));
 
     // island labels
     for (const isl of this.layout.islands) {
       const [lx, ly] = proj.project(isl.center.gx, isl.y + isl.rows * PLOT + 0.7);
       const t = new Text({
-        text: `${isl.name} · ${this.layout.buildings.filter((b) => b.islandId === isl.id).length}`,
+        text: isl.testOnly
+          ? `${isl.name} · ${isl.testCount} tests`
+          : `${isl.name} · ${this.layout.buildings.filter((b) => b.islandId === isl.id).length}`,
         style: { fontFamily: "\"Bricolage Grotesque\", sans-serif", fontWeight: "800", fontSize: 20, fill: 0xffffff, stroke: { color: 0x14323c, width: 4, alpha: 0.55 } },
       });
       t.anchor.set(0.5, 0);
       t.position.set(lx, ly);
       root.addChild(t);
     }
+
+    // Glow sprites: one per import direction on strong decks.
+    if (this.glowTexs.length) {
+      let gi = 0;
+      for (const pair of this.bridgePairs) {
+        if (pair.count < 15) continue;
+        if (!pair.clear) continue; // no deck, no glow (harbour rule)
+        for (const points of pair.dirs) {
+          gi++;
+          const spr = new Sprite(this.glowTexs[0]);
+          spr.anchor.set(0.5);
+          spr.width = TW * 1.15;
+          spr.height = TW * 0.67;
+          spr.blendMode = "add";
+          const cum = [0];
+          for (let i = 0; i + 1 < points.length; i++) {
+            const [px, py] = proj.project(points[i].gx, points[i].gy);
+            const [qx, qy] = proj.project(points[i + 1].gx, points[i + 1].gy);
+            cum.push(cum[i] + Math.hypot(qx - px, qy - py));
+          }
+          const total = cum[cum.length - 1] || 1;
+          this.glowSprites.push({ spr, points, cum: cum.map((c) => c / total), phase: (gi * 0.37) % 1 });
+          this.glowLayer.addChild(spr);
+        }
+      }
+    }
+    this.glowLayer.visible = false;
+    root.addChild(this.glowLayer);
 
     // construction overlay on the building being edited
     const constructionTex = this.tex("construction");
@@ -335,7 +680,8 @@ export class CityView {
     root.addChild(this.ship);
 
     // sail toward the target every frame; motion follows events only
-    this.app.ticker.add(() => {
+    this.app.ticker.add((time) => {
+      this.drawPulses(time.lastTime);
       if (!this.shipTarget) return;
       const [tx, ty] = this.shipTarget;
       this.ship.position.x += (tx - this.ship.position.x) * 0.07;

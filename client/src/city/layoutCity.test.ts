@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bridgeChevron, bridgeSpan, cityBridgeDeck, layoutCity, PLOT, plotDepth } from "./layoutCity";
+import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, GAP_PLOTS, islandShape, layoutCity, PLOT, plotDepth, repairBridges, waterSegments } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -83,8 +83,11 @@ describe("city layout from an extraction (fixture)", () => {
     const layout = layoutCity(wide);
     const [huge, tiny] = layout.islands;
     expect(layout.buildings).toHaveLength(401);
+    // Disjoint on some axis, in any direction: hub placement is
+    // free to put the tiny island left or above, not only after.
     const disjoint =
-      tiny.x >= huge.x + huge.cols * PLOT || tiny.y >= huge.y + huge.rows * PLOT;
+      tiny.x >= huge.x + huge.cols * PLOT || huge.x >= tiny.x + tiny.cols * PLOT
+      || tiny.y >= huge.y + huge.rows * PLOT || huge.y >= tiny.y + tiny.rows * PLOT;
     expect(disjoint).toBe(true);
   });
 
@@ -159,6 +162,61 @@ describe("bridgeSpan directions and degenerate cases", () => {
   });
 });
 
+describe("bridgeAxisLegs (owner: direction assets, straight one-axis bridges)", () => {
+  it("y-overlap gives a straight span along x at the overlap middle", () => {
+    const legs = bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 4, w: 10, h: 10 });
+    expect(legs).toEqual([{ gx: 10, gy: 7 }, { gx: 20, gy: 7 }]);
+  });
+  it("x-overlap gives a straight span along y", () => {
+    const legs = bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 4, y: 20, w: 10, h: 10 });
+    expect(legs).toEqual([{ gx: 7, gy: 10 }, { gx: 7, gy: 20 }]);
+  });
+  it("reversed sides flip the shore points", () => {
+    const legs = bridgeAxisLegs({ x: 20, y: 4, w: 10, h: 10 }, { x: 0, y: 0, w: 10, h: 10 });
+    expect(legs).toEqual([{ gx: 20, gy: 7 }, { gx: 10, gy: 7 }]);
+  });
+  it("no overlap on either axis gives null (caller bends)", () => {
+    expect(bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 20, w: 10, h: 10 })).toBeNull();
+  });
+});
+
+describe("repairBridges (owner: move the island, not the bridge)", () => {
+  it("moves the smaller end next to its partner when an island sits between", () => {
+    const items = [
+      { isl: { id: "a" }, cols: 4, rows: 4, px: 0, py: 0 },
+      { isl: { id: "c" }, cols: 4, rows: 4, px: 10, py: 0 },
+      { isl: { id: "b" }, cols: 4, rows: 4, px: 20, py: 0 },
+    ];
+    const before = Math.hypot(items[2].px - items[0].px, items[2].py - items[0].py);
+    repairBridges(items, [{ from_island: "a", to_island: "b", count: 20 }]);
+    const after = Math.hypot(items[2].px - items[0].px, items[2].py - items[0].py);
+    expect(after).toBeLessThan(before);
+    // and no overlaps with the gap
+    for (let i = 0; i < items.length; i++)
+      for (let j = i + 1; j < items.length; j++) {
+        const A = items[i], B = items[j];
+        const overlap = A.px < B.px + B.cols + GAP_PLOTS && B.px < A.px + A.cols + GAP_PLOTS && A.py < B.py + B.rows + GAP_PLOTS && B.py < A.py + A.rows + GAP_PLOTS;
+        expect(overlap).toBe(false);
+      }
+  });
+});
+
+describe("waterSegments (owner: bridges must not run through islands in between)", () => {
+  const path = [{ gx: 0, gy: 0 }, { gx: 20, gy: 0 }];
+  it("open water stays one segment", () => {
+    expect(waterSegments(path, () => false)).toHaveLength(1);
+  });
+  it("a land block in the middle cuts the deck in two", () => {
+    const segs = waterSegments(path, (gx) => gx >= 8 && gx < 12);
+    expect(segs).toHaveLength(2);
+    expect(segs[0][1].gx).toBeLessThanOrEqual(8);
+    expect(segs[1][0].gx).toBeGreaterThanOrEqual(12);
+  });
+  it("a path fully over land draws nothing", () => {
+    expect(waterSegments(path, () => true)).toHaveLength(0);
+  });
+});
+
 describe("plotDepth and cityBridgeDeck (user feedback 2026-10-27)", () => {
   it("building depth beats every ground tile on its own plot", () => {
     // Ground tiles draw at gx+gy; a building must sort after the
@@ -194,5 +252,104 @@ describe("bridgeChevron direction", () => {
     const rev = bridgeChevron([span[1], span[0]], cityBridgeDeck([span[1], span[0]], 5));
     expect(rev.tip.gx).toBeLessThan(fwd.tip.gx);
     expect(rev.tip.gy).toBeLessThan(fwd.tip.gy);
+  });
+});
+
+describe("organic island shape", () => {
+  it("is deterministic, keeps every building plot on land, and cuts some shore", () => {
+    const keep = new Set<string>();
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) keep.add(x + "," + y);
+    const a = islandShape("backend/app/modules/sales", 16, 14, keep);
+    const b = islandShape("backend/app/modules/sales", 16, 14, keep);
+    expect([...a].sort()).toEqual([...b].sort());
+    for (const k of keep) expect(a.has(k)).toBe(true);
+    expect(a.size).toBeLessThan(16 * 14); // some shore was cut
+    expect(a.size).toBeGreaterThan(40); // and the island remains
+  });
+
+  it("a test-only island is compact no matter how many test files it holds", () => {
+    const big = {
+      ...EXTRACTION,
+      islands: [{ id: "tests", name: "tests", path: "tests", file_count: 103, files: [] }],
+      files: Array.from({ length: 103 }, (_, i) => ({
+        path: `tests/t${i}.ts`, island_id: "tests", roles: [], building: "pennant", import_count: 0, importer_count: 0,
+      })),
+      bridges: [],
+    } as Extraction;
+    const layout = layoutCity(big);
+    const [isl] = layout.islands;
+    expect(isl.testOnly).toBe(true);
+    expect(isl.testCount).toBe(103);
+    expect(isl.cols * isl.rows).toBeLessThanOrEqual(6);
+    expect(layout.buildings).toHaveLength(103);
+  });
+});
+
+describe("hub placement", () => {
+  it("puts the most-connected island closest to the centre and never overlaps islands", () => {
+    const mk = (id: string, n: number) => ({
+      path: `${id}/f.ts`, island_id: id, roles: [], building: "cottage", import_count: 0, importer_count: 0,
+    });
+    const ext = {
+      counts: { files: 0, islands: 7, bridges: 6, parsed_imports: 0, resolved_imports: 0, unresolved_imports: 0 },
+      islands: ["hub", "a", "b", "c", "d", "e", "f"].map((id) => ({ id, name: id, path: id, file_count: 4, files: [] })),
+      files: ["hub", "a", "b", "c", "d", "e", "f"].flatMap((id) => [mk(id, 1), mk(id, 2), mk(id, 3), mk(id, 4)]),
+      bridges: ["a", "b", "c", "d", "e", "f"].map((id) => ({ from_island: id, to_island: "hub", count: 20 })),
+      unresolved_imports: [],
+    } as unknown as Extraction;
+    const layout = layoutCity(ext);
+    const centre = {
+      gx: layout.cols / 2, gy: layout.rows / 2,
+    };
+    const dist = (i: (typeof layout.islands)[number]) =>
+      Math.hypot(i.center.gx - centre.gx, i.center.gy - centre.gy);
+    const hub = layout.islands.find((i) => i.id === "hub")!;
+    for (const isl of layout.islands) if (isl.id !== "hub") expect(dist(hub)).toBeLessThanOrEqual(dist(isl));
+    // No two island plot-rects overlap (gap may shrink in the settle, land may not).
+    for (let a = 0; a < layout.islands.length; a++) for (let b = a + 1; b < layout.islands.length; b++) {
+      const A = layout.islands[a], B = layout.islands[b];
+      const overlap = A.x < B.x + B.cols * PLOT && B.x < A.x + A.cols * PLOT && A.y < B.y + B.rows * PLOT && B.y < A.y + A.rows * PLOT;
+      expect(overlap).toBe(false);
+    }
+    // Deterministic: same input, same map.
+    expect(layoutCity(ext).islands.map((i) => [i.id, i.x, i.y])).toEqual(layout.islands.map((i) => [i.id, i.x, i.y]));
+  });
+});
+
+describe("building arrangement inside an island", () => {
+  it("landmark in the centre, same-kind adjacency minimised, deterministic", () => {
+    const kinds = ["cottage", "cottage", "keep", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage"];
+    const a = arrangePlots(kinds, 3, 3);
+    expect(a[2]).toEqual({ x: 1, y: 1 }); // the keep takes the centre
+    const adj = (arr: { x: number; y: number }[]) => {
+      let n = 0;
+      for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+        if (kinds[i] === kinds[j] && Math.abs(arr[i].x - arr[j].x) + Math.abs(arr[i].y - arr[j].y) === 1) n++;
+      }
+      return n;
+    };
+    // 8 cottages on the 8 plots around a centre keep must touch;
+    // the corners-only lower bound is 8 shared edges. Row-major
+    // order gives the same grid here, so assert the count is the
+    // minimum this fixture allows and that the rule is stable.
+    expect(adj(a)).toBe(8);
+    expect(arrangePlots(kinds, 3, 3)).toEqual(a);
+  });
+
+  it("spreads a mixed island better than row-major order", () => {
+    const kinds = ["cottage", "cottage", "lighthouse", "cottage", "market", "cottage", "cottage", "silos", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage", "cottage"];
+    const a = arrangePlots(kinds, 4, 4);
+    expect(a[7]).toEqual({ x: 2, y: 2 }); // silos: highest-priority kind present, centre plot
+    const pos = new Map(a.map((pl, i) => [i, pl]));
+    let same = 0;
+    for (let i = 0; i < kinds.length; i++) for (let j = i + 1; j < kinds.length; j++) {
+      if (kinds[i] === kinds[j] && Math.abs(pos.get(i)!.x - pos.get(j)!.x) + Math.abs(pos.get(i)!.y - pos.get(j)!.y) === 1) same++;
+    }
+    let rowMajor = 0;
+    for (let i = 0; i < kinds.length; i++) for (let j = i + 1; j < kinds.length; j++) {
+      const pi = { x: i % 4, y: Math.floor(i / 4) }, pj = { x: j % 4, y: Math.floor(j / 4) };
+      if (kinds[i] === kinds[j] && Math.abs(pi.x - pj.x) + Math.abs(pi.y - pj.y) === 1) rowMajor++;
+    }
+    expect(same).toBeLessThan(rowMajor);
   });
 });
