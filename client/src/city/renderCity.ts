@@ -8,7 +8,7 @@ import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, type CityLayout } from "./layoutCity";
+import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, waterSegments, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -44,12 +44,14 @@ export class CityView {
   private glowLayer = new Container();
   private glowTexs: Texture[] = [];
   private glowSprites: { spr: Sprite; points: { gx: number; gy: number }[]; cum: number[]; phase: number }[] = [];
+  private landCells = new Set<string>();
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
     count: number;
     span: [{ gx: number; gy: number }, { gx: number; gy: number }];
     deck: ReturnType<typeof cityBridgeDeck>;
     points: { gx: number; gy: number }[];
+    segs: [{ gx: number; gy: number }, { gx: number; gy: number }][];
     dirs: { gx: number; gy: number }[][];
   }[] = [];
 
@@ -157,10 +159,12 @@ export class CityView {
         if (!strong) continue;
         // One deck height per import count, same in every
         // direction. A projected width made some decks thin.
+        // Only water segments draw: no deck runs through an
+        // island that sits between the pair.
         const targetH = Math.min(62, 44 + 3 * Math.log2(pair.count + 1));
-        for (let i = 0; i + 1 < pair.points.length; i++) {
-          const [px, py] = proj.project(pair.points[i].gx, pair.points[i].gy);
-          const [qx, qy] = proj.project(pair.points[i + 1].gx, pair.points[i + 1].gy);
+        for (const [p, q] of pair.segs) {
+          const [px, py] = proj.project(p.gx, p.gy);
+          const [qx, qy] = proj.project(q.gx, q.gy);
           this.addDeck(px, py, qx, qy, targetH, 1);
         }
       } else if (strong) {
@@ -196,11 +200,12 @@ export class CityView {
       let i = 0;
       while (i < glow.cum.length - 2 && t > glow.cum[i + 1]) i++;
       const lt = (t - glow.cum[i]) / Math.max(1e-6, glow.cum[i + 1] - glow.cum[i]);
-      const [px, py] = this.proj.project(
-        glow.points[i].gx + (glow.points[i + 1].gx - glow.points[i].gx) * lt,
-        glow.points[i].gy + (glow.points[i + 1].gy - glow.points[i].gy) * lt,
-      );
+      const gx = glow.points[i].gx + (glow.points[i + 1].gx - glow.points[i].gx) * lt;
+      const gy = glow.points[i].gy + (glow.points[i + 1].gy - glow.points[i].gy) * lt;
+      const [px, py] = this.proj.project(gx, gy);
       glow.spr.position.set(px, py);
+      // No glow over land: the path may cross an island in between.
+      glow.spr.visible = !this.landCells.has(Math.floor(gx) + "," + Math.floor(gy));
       glow.spr.texture = this.glowTexs[(frame + Math.floor(glow.phase * 7)) % 3];
     }
   }
@@ -302,6 +307,7 @@ export class CityView {
     const tileHByIndex = this.world.tiles.map((t) => (t.height * TW) / TWBASE);
     const landSet = new Set<string>();
     for (const isl of this.layout.islands) for (const k of isl.cells) landSet.add(k);
+    this.landCells = landSet;
     const cityLand = (gx: number, gy: number): boolean => landSet.has(gx + "," + gy);
 
     interface Item { depth: number; kind: number; node: Container }
@@ -481,6 +487,7 @@ export class CityView {
           span,
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
+          segs: waterSegments(deckPoints, (gx, gy) => landSet.has(gx + "," + gy)),
           dirs: pair.dirs.map((dir) => (dir.from === br.from ? shorePoints : [...shorePoints].reverse())),
         });
       }

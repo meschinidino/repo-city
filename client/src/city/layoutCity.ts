@@ -525,6 +525,41 @@ export function bridgeAxisLegs(a: GridRect, b: GridRect): [{ gx: number; gy: num
   return null;
 }
 
+/**
+ * The water-only parts of a bridge path (owner diagnosis: a
+ * bridge to a far island ignored islands in between and ran
+ * through them). The path is sampled every 0.1 cells; runs over
+ * land are cut out, so the deck stops at the middle island's
+ * shore and resumes on its other side. Short slivers go away.
+ */
+export function waterSegments(
+  points: { gx: number; gy: number }[],
+  isLand: (gx: number, gy: number) => boolean,
+): [{ gx: number; gy: number }, { gx: number; gy: number }][] {
+  const segs: [{ gx: number; gy: number }, { gx: number; gy: number }][] = [];
+  for (let i = 0; i + 1 < points.length; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const len = Math.hypot(b.gx - a.gx, b.gy - a.gy);
+    const steps = Math.max(1, Math.ceil(len / 0.1));
+    let start: { gx: number; gy: number } | null = null;
+    let prev: { gx: number; gy: number } | null = null;
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const p = { gx: a.gx + (b.gx - a.gx) * t, gy: a.gy + (b.gy - a.gy) * t };
+      const land = isLand(Math.floor(p.gx), Math.floor(p.gy));
+      if (!land && !start) start = p;
+      if (land && start && prev) {
+        segs.push([start, prev]);
+        start = null;
+      }
+      prev = p;
+    }
+    if (start && prev) segs.push([start, prev]);
+  }
+  return segs.filter(([p, q]) => Math.hypot(q.gx - p.gx, q.gy - p.gy) > 0.3);
+}
+
 export interface BridgeDeck {
   len: number; // grid cells along the span
   a: { gx: number; gy: number };

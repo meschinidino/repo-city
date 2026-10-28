@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth } from "./layoutCity";
+import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth, waterSegments } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -177,6 +177,22 @@ describe("bridgeAxisLegs (owner: direction assets, straight one-axis bridges)", 
   });
   it("no overlap on either axis gives null (caller bends)", () => {
     expect(bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 20, w: 10, h: 10 })).toBeNull();
+  });
+});
+
+describe("waterSegments (owner: bridges must not run through islands in between)", () => {
+  const path = [{ gx: 0, gy: 0 }, { gx: 20, gy: 0 }];
+  it("open water stays one segment", () => {
+    expect(waterSegments(path, () => false)).toHaveLength(1);
+  });
+  it("a land block in the middle cuts the deck in two", () => {
+    const segs = waterSegments(path, (gx) => gx >= 8 && gx < 12);
+    expect(segs).toHaveLength(2);
+    expect(segs[0][1].gx).toBeLessThanOrEqual(8);
+    expect(segs[1][0].gx).toBeGreaterThanOrEqual(12);
+  });
+  it("a path fully over land draws nothing", () => {
+    expect(waterSegments(path, () => true)).toHaveLength(0);
   });
 });
 
