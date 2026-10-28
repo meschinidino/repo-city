@@ -88,6 +88,16 @@ test("harbor bar journey: tokens, create, cap, pause, archive", async ({ page })
   await expect(page.locator("#create-btn")).toBeEnabled();
   await expect(page.locator("#cap-note")).toBeHidden();
 
+  // Muse is a first-class agent choice: picking it swaps the
+  // model and effort lists to the Muse words (Spark model,
+  // Ultra effort), and the selects stay enabled.
+  await page.locator("#agent-select").selectOption("muse");
+  await expect(page.locator("#model-select")).toBeEnabled();
+  await expect(page.locator("#model-select option[value='muse-spark-1.3']")).toHaveCount(1);
+  await expect(page.locator("#effort-select option[value='ultra']")).toHaveCount(1);
+  await page.locator("#agent-select").selectOption("watch");
+  await expect(page.locator("#model-select")).toBeDisabled();
+
   // Pause and resume the selected quest from the quest log.
   await page.locator("#act-pause").click();
   await expect(page.locator("#detail-state")).toContainText("paused");

@@ -83,6 +83,63 @@ function el<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
 
+/** Model and effort choices per agent CLI. The word lists are
+ * what each CLI accepts; the server checks them again. */
+export const AGENT_CHOICES: Record<string, { models: [string, string][]; efforts: [string, string][] }> = {
+  claude: {
+    models: [
+      ["", "Default model"],
+      ["opus", "Opus — strongest"],
+      ["sonnet", "Sonnet — balanced"],
+      ["haiku", "Haiku — fastest"],
+    ],
+    efforts: [
+      ["", "Default effort"],
+      ["low", "Low"],
+      ["medium", "Medium"],
+      ["high", "High"],
+      ["xhigh", "Extra high"],
+      ["max", "Max"],
+    ],
+  },
+  muse: {
+    models: [
+      ["", "Default model"],
+      ["muse-spark-1.3", "Muse Spark 1.3"],
+      ["muse-wonder-1.0", "Muse Wonder 1.0"],
+    ],
+    efforts: [
+      ["", "Default effort"],
+      ["none", "None"],
+      ["minimal", "Minimal"],
+      ["low", "Low"],
+      ["medium", "Medium"],
+      ["high", "High"],
+      ["xhigh", "Extra high"],
+      ["max", "Max"],
+      ["ultra", "Ultra"],
+    ],
+  },
+};
+
+function fillSelect(select: HTMLSelectElement, options: [string, string][]): void {
+  const keep = select.value;
+  select.innerHTML = "";
+  for (const [value, label] of options) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = label;
+    select.appendChild(o);
+  }
+  select.value = options.some(([v]) => v === keep) ? keep : "";
+}
+
+/** Agent name for the detail line, or null for watch-only. */
+export function agentLabel(s: SessionInfo): string | null {
+  if (!s.worktree_path) return null;
+  return s.agent === "muse" ? "Muse" : "Claude";
+}
+
 export class HarborBar {
   private deps: HarborDeps;
   private sessions: SessionInfo[] = [];
@@ -95,9 +152,15 @@ export class HarborBar {
     el("new-quest").addEventListener("click", () => this.toggleLog());
     el("create-btn").addEventListener("click", () => void this.create());
     const syncAgentSelects = () => {
-      const watch = el<HTMLSelectElement>("agent-select").value === "watch";
-      el<HTMLSelectElement>("model-select").disabled = watch;
-      el<HTMLSelectElement>("effort-select").disabled = watch;
+      const kind = el<HTMLSelectElement>("agent-select").value;
+      const watch = kind === "watch";
+      const modelSel = el<HTMLSelectElement>("model-select");
+      const effortSel = el<HTMLSelectElement>("effort-select");
+      modelSel.disabled = watch;
+      effortSel.disabled = watch;
+      const choices = AGENT_CHOICES[kind === "muse" ? "muse" : "claude"];
+      fillSelect(modelSel, choices.models);
+      fillSelect(effortSel, choices.efforts);
     };
     el<HTMLSelectElement>("agent-select").addEventListener("change", () => {
       syncAgentSelects();
@@ -216,7 +279,7 @@ export class HarborBar {
     const cap = capState(this.allSessions);
     const createBtn = el<HTMLButtonElement>("create-btn");
     const note = el("cap-note");
-    const wantsAgent = el<HTMLSelectElement>("agent-select").value === "agent";
+    const wantsAgent = el<HTMLSelectElement>("agent-select").value !== "watch";
     createBtn.disabled = cap.capped && wantsAgent;
     const named = cap.active.slice(0, 3).map((s) => `“${s.task ?? "untitled"}” on ${s.repo_path === this.deps.repo ? this.islandName(s.island_id) : "another repo"}`).join(", ");
     const more = cap.active.length > 3 ? `, and ${cap.active.length - 3} more` : "";
@@ -233,7 +296,7 @@ export class HarborBar {
     }
     detail.style.display = "block";
     el("detail-title").textContent = s.task ?? "Untitled quest";
-    const chosen = [s.model, s.effort].filter(Boolean).join(" · ");
+    const chosen = [agentLabel(s), s.model, s.effort].filter(Boolean).join(" · ");
     el("detail-state").textContent = `${this.islandName(s.island_id)} — ${stateText(s.state)}${chosen ? ` · ${chosen}` : ""}`;
     const allowed = actionsFor(s);
     for (const [id, action] of [
@@ -257,7 +320,8 @@ export class HarborBar {
   private async create(): Promise<void> {
     const task = el<HTMLInputElement>("quest-task").value.trim();
     const islandId = el<HTMLSelectElement>("island-select").value || undefined;
-    const spawn = el<HTMLSelectElement>("agent-select").value === "agent";
+    const agentKind = el<HTMLSelectElement>("agent-select").value;
+    const spawn = agentKind !== "watch";
     if (!task) {
       this.showError("Write the quest in plain English first.");
       this.toggleLog(true);
@@ -266,7 +330,14 @@ export class HarborBar {
     const model = el<HTMLSelectElement>("model-select").value || undefined;
     const effort = el<HTMLSelectElement>("effort-select").value || undefined;
     try {
-      const s = await createSession(this.deps.server, this.deps.repo, { task, spawn, islandId, model: spawn ? model : undefined, effort: spawn ? effort : undefined });
+      const s = await createSession(this.deps.server, this.deps.repo, {
+        task,
+        spawn,
+        islandId,
+        model: spawn ? model : undefined,
+        effort: spawn ? effort : undefined,
+        agent: spawn ? (agentKind === "muse" ? "muse" : "claude") : undefined,
+      });
       this.selectedId = s.id;
       el<HTMLInputElement>("quest-task").value = "";
       this.showError("");

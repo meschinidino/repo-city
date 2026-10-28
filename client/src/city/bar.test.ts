@@ -2,11 +2,11 @@
 // owner's decisions (D-cap), so they carry unit tests.
 
 import { describe, expect, it } from "vitest";
-import { actionsFor, capState, stateText } from "./bar";
+import { AGENT_CHOICES, actionsFor, agentLabel, capState, stateText } from "./bar";
 import type { SessionInfo } from "./live";
 
 const s = (state: string, task = "t", worktree: string | null = "/wt"): SessionInfo =>
-  ({ id: Math.random().toString(36).slice(2), repo_path: "/r", worktree_path: worktree, island_id: null, task, state, cli_session_id: null, model: null, effort: null, created_ms: 0, updated_ms: 0 });
+  ({ id: Math.random().toString(36).slice(2), repo_path: "/r", worktree_path: worktree, island_id: null, task, state, cli_session_id: null, model: null, effort: null, agent: "claude", created_ms: 0, updated_ms: 0 });
 
 describe("capState (server rule: 3 spawned working quests)", () => {
   it("caps at three working quests with worktrees and names them", () => {
@@ -35,5 +35,19 @@ describe("stateText and actionsFor", () => {
     expect(actionsFor(s("finished"))).not.toContain("follow-up");
     const withCli = { ...s("finished"), cli_session_id: "cli-1" };
     expect(actionsFor(withCli)).toContain("follow-up");
+  });
+});
+
+describe("agent choices (muse is a first-class agent)", () => {
+  it("muse has its own model and effort words", () => {
+    const muse = AGENT_CHOICES.muse;
+    expect(muse.models.map(([v]) => v)).toContain("muse-spark-1.3");
+    expect(muse.efforts.map(([v]) => v)).toContain("ultra");
+    expect(AGENT_CHOICES.claude.efforts.map(([v]) => v)).not.toContain("ultra");
+  });
+  it("the detail line names the agent, never for watch-only", () => {
+    expect(agentLabel(s("working"))).toBe("Claude");
+    expect(agentLabel({ ...s("working"), agent: "muse" })).toBe("Muse");
+    expect(agentLabel(s("working", "t", null))).toBeNull();
   });
 });

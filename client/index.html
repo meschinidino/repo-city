@@ -150,24 +150,13 @@
       <label for="agent-select">Agent</label>
       <select id="agent-select">
         <option value="agent">Claude agent (works in its own worktree)</option>
+        <option value="muse">Muse agent (works in its own worktree)</option>
         <option value="watch">Watch only (no agent; the map follows real edits)</option>
       </select>
       <label for="model-select">Model</label>
-      <select id="model-select">
-        <option value="">Default model</option>
-        <option value="opus">Opus — strongest</option>
-        <option value="sonnet">Sonnet — balanced</option>
-        <option value="haiku">Haiku — fastest</option>
-      </select>
+      <select id="model-select"></select>
       <label for="effort-select">Effort</label>
-      <select id="effort-select">
-        <option value="">Default effort</option>
-        <option value="low">Low</option>
-        <option value="medium">Medium</option>
-        <option value="high">High</option>
-        <option value="xhigh">Extra high</option>
-        <option value="max">Max</option>
-      </select>
+      <select id="effort-select"></select>
       <div class="action-row">
         <button id="create-btn" class="primary-btn" type="button">Start quest</button>
       </div>

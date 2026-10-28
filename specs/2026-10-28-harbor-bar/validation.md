@@ -59,3 +59,18 @@ watcher-only (spawn=false); no live Claude run is claimed.
   No live Claude run with a chosen model/effort has been
   observed. The owner has not judged this round yet; PR #18
   stays open.
+
+## Muse option added (2026-10-28, later still)
+
+- Owner: "still no muse option." The Agent list now offers
+  Muse, with per-agent model/effort lists and server checks.
+- Real runs through the API (not fixtures): create with
+  model muse-spark-1.3 finished and wrote hello.txt in the
+  worktree; follow-up wrote second.txt in the same session;
+  a slow quest paused mid-run, resumed on the same Muse
+  session id, and finished with its file written.
+- Cross review: Claude Opus, two passes; 10+ fixes (see
+  CHANGELOG). Open gap, shared with Claude: pause/stop kill
+  the agent process, not its process group.
+- Gates: Vitest 80, tsc clean, Playwright 5, cargo tests
+  pass, clippy clean. PR #18 stays open for owner judgement.
