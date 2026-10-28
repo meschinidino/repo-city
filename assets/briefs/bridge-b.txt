@@ -1,0 +1,13 @@
+Bridge deck, second direction — Repo City sprite pipeline brief
+
+Same bridge as assets/briefs/bridge.txt (run 1 art attached as
+reference), same warm matte wood, posts and rope rails, same light.
+One change: the long axis runs upper-left to lower-right, the other
+isometric direction of the map.
+
+Solid magenta #FF00FF background, no shadow on it, no water, no
+ground, no text, no people. One segment, centered.
+
+Processed the same way as direction A: magenta keyed out, deck
+axis levelled, one post-to-post unit cut as the tile
+(assets/sprites/bridge-b.png; direction A is bridge-a.png).

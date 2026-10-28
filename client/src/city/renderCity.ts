@@ -1,5 +1,6 @@
 import { Application, Assets, Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
-import bridgeUrl from "../../../assets/sprites/bridge.png";
+import bridgeAUrl from "../../../assets/sprites/bridge-a.png";
+import bridgeBUrl from "../../../assets/sprites/bridge-b.png";
 import glow0Url from "../../../assets/sprites/glow-0.png";
 import glow1Url from "../../../assets/sprites/glow-1.png";
 import glow2Url from "../../../assets/sprites/glow-2.png";
@@ -7,7 +8,7 @@ import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, type CityLayout } from "./layoutCity";
+import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -38,16 +39,18 @@ export class CityView {
   private fitScale = 1;
   private bridgeGfx!: Graphics;
   private bridgeSprites = new Container();
-  private bridgeTex: Texture | null = null;
+  private bridgeTexA: Texture | null = null;
+  private bridgeTexB: Texture | null = null;
   private glowLayer = new Container();
   private glowTexs: Texture[] = [];
-  private glowSprites: { spr: Sprite; legs: [{ gx: number; gy: number }, { gx: number; gy: number }][]; split: number; phase: number }[] = [];
+  private glowSprites: { spr: Sprite; points: { gx: number; gy: number }[]; cum: number[]; phase: number }[] = [];
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
     count: number;
     span: [{ gx: number; gy: number }, { gx: number; gy: number }];
     deck: ReturnType<typeof cityBridgeDeck>;
-    dirs: [{ gx: number; gy: number }, { gx: number; gy: number }][];
+    points: { gx: number; gy: number }[];
+    dirs: { gx: number; gy: number }[][];
   }[] = [];
 
   constructor(world: World, layout: CityLayout) {
@@ -109,17 +112,21 @@ export class CityView {
     return [[a, elbow], [elbow, b]];
   }
 
-  /** One bridge deck between two screen points, from the tile
-   * (assets/sprites/bridge.png). The turn is kept within half a
-   * circle of flat, so the rails always stand up: a deck that
-   * points left is drawn flipped, never upside down. */
+  /** One bridge deck between two screen points. Two direction
+   * tiles (owner: new assets for different directions): A for
+   * legs that run up-right on screen, B for legs that run
+   * down-right, each drawn in its own perspective. The turn is
+   * kept within half a circle of flat, so the rails always stand
+   * up: a deck that points left is drawn flipped, never upside
+   * down. */
   private addDeck(ax: number, ay: number, bx: number, by: number, targetH: number, alpha: number): void {
-    const tex = this.bridgeTex!;
     const len = Math.hypot(bx - ax, by - ay);
     if (len < 4) return;
     let rot = Math.atan2(by - ay, bx - ax);
     if (rot > Math.PI / 2) rot -= Math.PI;
     else if (rot < -Math.PI / 2) rot += Math.PI;
+    const tex = (rot < 0 ? this.bridgeTexA : this.bridgeTexB) ?? this.bridgeTexA ?? this.bridgeTexB;
+    if (!tex) return;
     const ts = new TilingSprite({ texture: tex, width: len * 1.04, height: targetH });
     ts.anchor.set(0.5);
     ts.position.set((ax + bx) / 2, (ay + by) / 2);
@@ -146,13 +153,13 @@ export class CityView {
       if (this.zoomLevel === "map" && !strong) continue;
       const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
       const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
-      if (this.bridgeTex) {
+      if (this.bridgeTexA || this.bridgeTexB) {
         if (!strong) continue;
         const [c0, c3] = [pair.deck.corners[0], pair.deck.corners[3]].map((c) => proj.project(c.gx, c.gy));
         const deckW = Math.max(14, Math.hypot(c3[0] - c0[0], c3[1] - c0[1]));
-        for (const [p, q] of this.spanLegs(pair.span)) {
-          const [px, py] = proj.project(p.gx, p.gy);
-          const [qx, qy] = proj.project(q.gx, q.gy);
+        for (let i = 0; i + 1 < pair.points.length; i++) {
+          const [px, py] = proj.project(pair.points[i].gx, pair.points[i].gy);
+          const [qx, qy] = proj.project(pair.points[i + 1].gx, pair.points[i + 1].gy);
           this.addDeck(px, py, qx, qy, deckW * 2.6, 1);
         }
       } else if (strong) {
@@ -184,12 +191,13 @@ export class CityView {
     const frame = Math.floor(nowMs / 160) % 3;
     for (const glow of this.glowSprites) {
       const t = ((nowMs / 4500) + glow.phase) % 1;
-      // Follow the deck path: first leg, then the second leg.
-      const leg = t < glow.split ? glow.legs[0] : glow.legs[glow.legs.length - 1];
-      const lt = t < glow.split ? t / glow.split : (t - glow.split) / (1 - glow.split);
+      // Follow the deck path point by point (cum = path fractions).
+      let i = 0;
+      while (i < glow.cum.length - 2 && t > glow.cum[i + 1]) i++;
+      const lt = (t - glow.cum[i]) / Math.max(1e-6, glow.cum[i + 1] - glow.cum[i]);
       const [px, py] = this.proj.project(
-        leg[0].gx + (leg[1].gx - leg[0].gx) * lt,
-        leg[0].gy + (leg[1].gy - leg[0].gy) * lt,
+        glow.points[i].gx + (glow.points[i + 1].gx - glow.points[i].gx) * lt,
+        glow.points[i].gy + (glow.points[i + 1].gy - glow.points[i].gy) * lt,
       );
       glow.spr.position.set(px, py);
       glow.spr.texture = this.glowTexs[(frame + Math.floor(glow.phase * 7)) % 3];
@@ -413,20 +421,34 @@ export class CityView {
         const a = byId.get(br.from);
         const b = byId.get(br.to);
         if (!a || !b) continue;
-        const span = bridgeSpan(
-          { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT },
-          { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT },
-        );
-        if (!span) continue;
+        const rectA = { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT };
+        const rectB = { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT };
+        // Straight along one map axis when the rectangles overlap
+        // on the other axis; the bent span is the fallback.
+        const axis = bridgeAxisLegs(rectA, rectB);
+        let span: [{ gx: number; gy: number }, { gx: number; gy: number }];
+        let points: { gx: number; gy: number }[];
+        if (axis) {
+          span = axis;
+          points = [axis[0], axis[1]];
+        } else {
+          const bent = bridgeSpan(rectA, rectB);
+          if (!bent) continue;
+          span = bent;
+          const legs = this.spanLegs(bent);
+          points = legs.length === 2 ? [legs[0][0], legs[0][1], legs[1][1]] : [bent[0], bent[1]];
+        }
         this.bridgePairs.push({
           count: pair.count,
           span,
           deck: cityBridgeDeck(span, pair.count),
-          dirs: pair.dirs.map((dir) => (dir.from === br.from ? span : [span[1], span[0]] as typeof span)),
+          points,
+          dirs: pair.dirs.map((dir) => (dir.from === br.from ? points : [...points].reverse())),
         });
       }
     }
-    this.bridgeTex = (await Assets.load(bridgeUrl).catch(() => null)) as Texture | null;
+    this.bridgeTexA = (await Assets.load(bridgeAUrl).catch(() => null)) as Texture | null;
+    this.bridgeTexB = (await Assets.load(bridgeBUrl).catch(() => null)) as Texture | null;
     this.glowTexs = ((await Promise.all([glow0Url, glow1Url, glow2Url].map((u) => Assets.load(u).catch(() => null)))).filter(Boolean) as Texture[]);
     this.bridgeGfx = new Graphics();
     root.addChild(this.bridgeSprites);
@@ -552,24 +574,21 @@ export class CityView {
       let gi = 0;
       for (const pair of this.bridgePairs) {
         if (pair.count < 15) continue;
-        for (const span of pair.dirs) {
+        for (const points of pair.dirs) {
           gi++;
           const spr = new Sprite(this.glowTexs[0]);
           spr.anchor.set(0.5);
           spr.width = TW * 1.15;
           spr.height = TW * 0.67;
           spr.blendMode = "add";
-          const legs = this.spanLegs(span);
-          let split = 1;
-          if (legs.length === 2) {
-            const lens = legs.map(([p, q]) => {
-              const [px, py] = proj.project(p.gx, p.gy);
-              const [qx, qy] = proj.project(q.gx, q.gy);
-              return Math.hypot(qx - px, qy - py);
-            });
-            split = lens[0] / (lens[0] + lens[1]);
+          const cum = [0];
+          for (let i = 0; i + 1 < points.length; i++) {
+            const [px, py] = proj.project(points[i].gx, points[i].gy);
+            const [qx, qy] = proj.project(points[i + 1].gx, points[i + 1].gy);
+            cum.push(cum[i] + Math.hypot(qx - px, qy - py));
           }
-          this.glowSprites.push({ spr, legs, split, phase: (gi * 0.37) % 1 });
+          const total = cum[cum.length - 1] || 1;
+          this.glowSprites.push({ spr, points, cum: cum.map((c) => c / total), phase: (gi * 0.37) % 1 });
           this.glowLayer.addChild(spr);
         }
       }

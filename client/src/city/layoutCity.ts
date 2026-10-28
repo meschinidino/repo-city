@@ -493,6 +493,38 @@ export function bridgeSpan(a: GridRect, b: GridRect): [{ gx: number; gy: number 
   ];
 }
 
+/**
+ * A straight bridge along one map axis between two island
+ * rectangles: possible when the rectangles overlap on the other
+ * axis. Returns the shore-to-shore span on that axis, or null
+ * when neither axis overlaps (the caller then bends the span).
+ * A straight one-axis bridge uses one direction asset and never
+ * bends in open water.
+ */
+export function bridgeAxisLegs(a: GridRect, b: GridRect): [{ gx: number; gy: number }, { gx: number; gy: number }] | null {
+  const oy0 = Math.max(a.y, b.y);
+  const oy1 = Math.min(a.y + a.h, b.y + b.h);
+  if (oy1 - oy0 > 0.5) {
+    const gy = (oy0 + oy1) / 2;
+    const bRight = b.x + b.w / 2 > a.x + a.w / 2;
+    return [
+      { gx: bRight ? a.x + a.w : a.x, gy },
+      { gx: bRight ? b.x : b.x + b.w, gy },
+    ];
+  }
+  const ox0 = Math.max(a.x, b.x);
+  const ox1 = Math.min(a.x + a.w, b.x + b.w);
+  if (ox1 - ox0 > 0.5) {
+    const gx = (ox0 + ox1) / 2;
+    const bBelow = b.y + b.h / 2 > a.y + a.h / 2;
+    return [
+      { gx, gy: bBelow ? a.y + a.h : a.y },
+      { gx, gy: bBelow ? b.y : b.y + b.h },
+    ];
+  }
+  return null;
+}
+
 export interface BridgeDeck {
   len: number; // grid cells along the span
   a: { gx: number; gy: number };

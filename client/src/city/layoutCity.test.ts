@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { arrangePlots, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth } from "./layoutCity";
+import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -159,6 +159,24 @@ describe("bridgeSpan directions and degenerate cases", () => {
   });
   it("an island to itself has no span", () => {
     expect(bridgeSpan(a, a)).toBeNull();
+  });
+});
+
+describe("bridgeAxisLegs (owner: direction assets, straight one-axis bridges)", () => {
+  it("y-overlap gives a straight span along x at the overlap middle", () => {
+    const legs = bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 4, w: 10, h: 10 });
+    expect(legs).toEqual([{ gx: 10, gy: 7 }, { gx: 20, gy: 7 }]);
+  });
+  it("x-overlap gives a straight span along y", () => {
+    const legs = bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 4, y: 20, w: 10, h: 10 });
+    expect(legs).toEqual([{ gx: 7, gy: 10 }, { gx: 7, gy: 20 }]);
+  });
+  it("reversed sides flip the shore points", () => {
+    const legs = bridgeAxisLegs({ x: 20, y: 4, w: 10, h: 10 }, { x: 0, y: 0, w: 10, h: 10 });
+    expect(legs).toEqual([{ gx: 20, gy: 7 }, { gx: 10, gy: 7 }]);
+  });
+  it("no overlap on either axis gives null (caller bends)", () => {
+    expect(bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 20, w: 10, h: 10 })).toBeNull();
   });
 });
 
