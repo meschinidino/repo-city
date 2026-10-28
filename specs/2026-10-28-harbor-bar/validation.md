@@ -92,3 +92,12 @@ watcher-only (spawn=false); no live Claude run is claimed.
   this diff a pass): 4 P1 races fixed, listed in CHANGELOG.
 - Gates: Vitest 83, tsc clean, Playwright 5, cargo pass,
   clippy clean. PR #18 stays open for owner judgement.
+
+## Panel close + responsive fit (2026-10-28, later still)
+
+- Water click closes the quest; the panel has a Close
+  button. Panel fit probed at seven sizes: top was off-screen
+  everywhere before (box-sizing), 17px+ clear everywhere
+  after. Gates: Vitest 83, Playwright 5.
+- Cross review owed: both second-model reviewers were at
+  their usage limits. Not merged.

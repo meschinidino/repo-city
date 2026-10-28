@@ -122,6 +122,10 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     if (id) {
       city.selectIsland(id);
       bar.setTargetIsland(id);
+    } else {
+      // Open water: the quest closes (owner call).
+      city.selectIsland(null);
+      bar.closeQuest();
     }
   };
   void bar.refresh();
@@ -135,7 +139,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     logEl.style.bottom = `${barEl.offsetHeight + 8}px`;
     // Cap the height against the same measured bar, so a tall
     // (wrapped) bar cannot push the sheet top off-screen.
-    logEl.style.maxHeight = `calc(100dvh - ${barEl.offsetHeight + 24}px)`;
+    logEl.style.maxHeight = `min(calc(100dvh - ${barEl.offsetHeight + 16}px), 82dvh)`;
   };
   placeQuestlog();
   window.addEventListener("resize", placeQuestlog);

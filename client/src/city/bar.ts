@@ -170,6 +170,7 @@ export class HarborBar {
   constructor(deps: HarborDeps) {
     this.deps = deps;
     el("new-quest").addEventListener("click", () => this.toggleLog());
+    el("questlog-close").addEventListener("click", () => this.closeQuest());
     el("create-btn").addEventListener("click", () => void this.create());
     const syncAgentSelects = () => {
       const kind = el<HTMLSelectElement>("agent-select").value;
@@ -228,6 +229,14 @@ export class HarborBar {
   setTargetIsland(id: string | null): void {
     el<HTMLSelectElement>("island-select").value = id ?? "";
     if (id && !this.logOpen) this.toggleLog(true);
+  }
+
+  /** Close the quest log and clear the picked target (the
+   * Close button, or a click on open water). The picked quest
+   * token, if any, stays picked for when the log reopens. */
+  closeQuest(): void {
+    el<HTMLSelectElement>("island-select").value = "";
+    this.toggleLog(false);
   }
 
   private allSessions: SessionInfo[] = [];

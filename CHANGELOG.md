@@ -13,6 +13,11 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 - Cross reviews (Codex, Claude Opus) fixed: tokens follow all sessions (5s poll), follow-up only with a CLI session, no invented "report ready" state, report-card races and stale anchors, HTML injection via island names, cap-note naming other repos' islands.
 - Tests: Vitest 78, Playwright 4 (new harbor journey; day-3 journey unchanged).
 
+### Fixed — quest panel close + responsive fit (owner round; on PR #18, not merged)
+- A click on open water now closes the quest log, clears the picked target, and takes the ring off. A quest picked by token stays picked for when the log reopens. The panel also has a plain Close button in its header.
+- The quest panel is responsive now. Measured before the fix at seven sizes (1440x900 to 320x568): the panel top sat off-screen at every size (y = -3 to -7) because padding added past the height cap (no `box-sizing`). Fixed: border-box sizing, height capped against the measured bar height and 82dvh, feed height in dvh. After: top rests 17px or more below the window top at all seven sizes, no inner or outer overflow. New e2e assertions in `responsive.spec.ts` cover the fit, the Close button, island-click open, and water-click close.
+- Cross review is OWED: Claude Opus and Codex were both at their usage limits when this round was pushed. The change is CSS plus two click paths and is fully covered by the browser tests above; the second-model pass must still run before merge.
+
 ### Added — ship dock, agent feed, talk-to-agent (owner round; on PR #18, not merged)
 - `muse-wonder-1.0-full` joins the Muse model list. `muse model-profile` resolves the id; a live run on this account refused with "does not exist or you lack access", so the id is real and the form is right — access is account-bound, and the refusal now lands in the quest's failure reason in words.
 - The ship docks. The map now follows the quest you pick in the bar (token click or create): its event log replays, the ship sits at that quest's island gate from the start, and its lit buildings show. Live events buffer during replay and merge in order. Stop & report acts on the followed quest, not silently on the first session. A quest with no island still gets no ship until a real touch names one.
