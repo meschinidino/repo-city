@@ -240,6 +240,7 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/archive", post(archive_session))
         .route("/api/sessions/{id}/follow-up", post(follow_up_session))
+        .route("/api/sessions/{id}/message", post(message_session))
         .route("/ws", get(ws_handler))
         // Local single-user tool: only loopback pages (the Vite dev
         // client) may call this API from a browser. A permissive
@@ -321,6 +322,87 @@ struct CreateSession {
     /// file events then come from real edits, whoever makes them.
     #[serde(default)]
     spawn: bool,
+    /// Agent model for the spawned Claude process (T12 form):
+    /// a CLI alias (`opus`, `sonnet`, `haiku`) or a full model
+    /// name. None = the CLI default.
+    model: Option<String>,
+    /// Agent effort for the spawned agent process. The word list
+    /// depends on the agent. None = the CLI default.
+    effort: Option<String>,
+    /// Which agent CLI runs the quest: `claude` (default) or
+    /// `muse`. Always validated; stored only when `spawn` is set.
+    agent: Option<String>,
+}
+
+/// True when the agent CLI binary is on this server's PATH.
+/// Checked at create so a quest for a missing CLI refuses in
+/// words instead of failing after its worktree exists.
+fn cli_available(name: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = dir.join(name);
+                candidate.is_file()
+                    && candidate
+                        .metadata()
+                        .map(|m| m.permissions().mode() & 0o111 != 0)
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Agent, model, and effort as the chosen CLI takes them, or a
+/// refusal. Model and effort word lists differ per agent; the
+/// Muse effort list is the one `muse exec --help` prints.
+fn valid_agent_choices(
+    agent: &Option<String>,
+    model: &Option<String>,
+    effort: &Option<String>,
+) -> Result<(String, Option<String>, Option<String>), String> {
+    let agent = agent.as_deref().map(str::trim).filter(|a| !a.is_empty()).unwrap_or("claude");
+    if !["claude", "muse"].contains(&agent) {
+        return Err(format!("unknown agent `{agent}`: use claude or muse"));
+    }
+    let model = model.as_deref().map(str::trim).filter(|m| !m.is_empty());
+    if let Some(m) = model {
+        // Full names: <agent>-<letters, digits, dot, dash> with an
+        // optional [1m] context suffix (Claude only). The value
+        // goes to the CLI as one argv element (no shell), but it
+        // is also stored and shown, so reject spaces and control
+        // characters.
+        let bare = m.strip_suffix("[1m]").unwrap_or(m);
+        let clean = |name: &str, prefix: &str| {
+            name.starts_with(prefix)
+                && name.len() > prefix.len()
+                && name.len() <= 60
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
+        };
+        let ok = match agent {
+            "muse" => clean(bare, "muse-") && bare == m,
+            _ => ["opus", "sonnet", "haiku"].contains(&m) || clean(bare, "claude-"),
+        };
+        if !ok {
+            return Err(match agent {
+                "muse" => format!("unknown model `{m}`: use a full muse- name"),
+                _ => format!("unknown model `{m}`: use opus, sonnet, haiku, or a full claude- name"),
+            });
+        }
+    }
+    let effort = effort.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    if let Some(e) = effort {
+        let words: &[&str] = match agent {
+            "muse" => &["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+            _ => &["low", "medium", "high", "xhigh", "max"],
+        };
+        if !words.contains(&e) {
+            return Err(format!("unknown effort `{e}` for {agent}: use {}", words.join(", ")));
+        }
+    }
+    Ok((agent.to_string(), model.map(str::to_string), effort.map(str::to_string)))
 }
 
 async fn create_session(
@@ -351,11 +433,33 @@ async fn create_session(
     let wt_root = std::env::var("HOME")
         .map(|h| PathBuf::from(h).join(".repo-city").join("worktrees"))
         .unwrap_or_else(|_| std::env::temp_dir().join("repo-city-worktrees"));
+    let (agent, model, effort) = match valid_agent_choices(&body.agent, &body.model, &body.effort) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if body.spawn && !cli_available(&agent) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("the {agent} CLI is not installed on this server"),
+        )
+        .into_response();
+    }
+    // Watch-only sessions have no agent: store no agent, model,
+    // or effort, whatever the caller sent (the client already
+    // drops them).
+    let (agent, model, effort) = if body.spawn {
+        (Some(agent), model, effort)
+    } else {
+        (None, None, None)
+    };
     let session = match state.store.create_session_guarded(
         &body.repo_path,
         body.island_id.as_deref(),
         body.task.as_deref(),
         body.spawn.then(|| wt_root.to_string_lossy().into_owned()).as_deref(),
+        model.as_deref(),
+        effort.as_deref(),
+        agent.as_deref(),
     ) {
         Ok(s) => s,
         Err(e @ crate::store::CreateError::IslandLocked { .. })
@@ -400,7 +504,7 @@ async fn create_session(
     state.start_watcher(&session.id, &run_root);
     if body.spawn {
         if let Some(task) = body.task.clone() {
-            spawn_claude(state.clone(), session.id.clone(), run_root, task, None);
+            spawn_agent(&session, state.clone(), run_root, task, None);
         }
     }
     (
@@ -413,12 +517,15 @@ async fn create_session(
 /// Run the Claude adapter for one session. Permission handling here
 /// is the spike default (`acceptEdits` inside the session repo);
 /// T8 owns the permission bridge and may tighten this.
+#[allow(clippy::too_many_arguments)]
 fn spawn_claude(
     state: Arc<AppState>,
     session_id: String,
     cwd: PathBuf,
     task: String,
     resume_cli_id: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
 ) {
     // Marked synchronously so a /stop racing the spawn can wait for
     // the child to register instead of missing it entirely.
@@ -439,6 +546,16 @@ fn spawn_claude(
         if let Some(cli_id) = &resume_cli_id {
             args.push("--resume".into());
             args.push(cli_id.clone());
+        }
+        // The agent choices from the quest form (T12), kept on
+        // resume and follow-up so a quest keeps its model/effort.
+        if let Some(m) = &model {
+            args.push("--model".into());
+            args.push(m.clone());
+        }
+        if let Some(e) = &effort {
+            args.push("--effort".into());
+            args.push(e.clone());
         }
         let mut child = match tokio::process::Command::new("claude")
             .args(&args)
@@ -467,6 +584,7 @@ fn spawn_claude(
         };
         // Registered so /stop can kill the agent; the reader task
         // below owns the exit wait through this same handle.
+        let my_pid = child.id();
         state
             .children
             .lock()
@@ -529,10 +647,22 @@ fn spawn_claude(
                 }
                 let _ = state.emit(&session_id, Source::Cli, payload);
             }
+            if finish_state.is_some() {
+                break;
+            }
         }
         // If /stop killed the child, it already removed the handle
-        // and set the state; do not overwrite either.
-        let mut child = state.children.lock().unwrap().remove(&session_id);
+        // and set the state; do not overwrite either. Take back
+        // only our own child: a fast pause->resume may already
+        // have registered the next run under this id.
+        let mut child = {
+            let mut map = state.children.lock().unwrap();
+            if map.get(&session_id).and_then(|c| c.id()) == my_pid {
+                map.remove(&session_id)
+            } else {
+                None
+            }
+        };
         let stopped_externally = child.is_none()
             || state
                 .store
@@ -540,6 +670,11 @@ fn spawn_claude(
                 .ok()
                 .flatten()
                 .is_some_and(|s| s.state != "working");
+        if finish_state.is_some() || stopped_externally {
+            if let Some(c) = child.as_mut() {
+                let _ = c.start_kill();
+            }
+        }
         let status = match child.as_mut() {
             Some(c) => c.wait().await.map_err(|e| e.to_string()),
             None => Err("child already reaped".to_string()),
@@ -579,6 +714,291 @@ fn spawn_claude(
                 .set_state(&session_id, if ok { "finished" } else { "failed" });
         } else if let Some(state_name) = finish_state {
             let _ = state.store.set_state(&session_id, state_name);
+        }
+        // Talk-to-agent: a queued message starts the next run.
+        if state
+            .store
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.state == "finished")
+        {
+            run_pending_message(state.clone(), &session_id).await;
+        }
+    });
+}
+
+/// Spawn the agent CLI the quest chose at creation. Claude is
+/// the default; `muse` runs `muse exec` in the same worktree
+/// machinery (children map, watcher, stop races).
+#[allow(clippy::too_many_arguments)]
+fn spawn_agent(
+    session: &crate::store::Session,
+    state: Arc<AppState>,
+    cwd: PathBuf,
+    task: String,
+    resume_cli_id: Option<String>,
+) {
+    match session.agent.as_deref() {
+        Some("muse") => spawn_muse(
+            state,
+            session.id.clone(),
+            cwd,
+            task,
+            resume_cli_id,
+            session.model.clone(),
+            session.effort.clone(),
+        ),
+        _ => spawn_claude(
+            state,
+            session.id.clone(),
+            cwd,
+            task,
+            resume_cli_id,
+            session.model.clone(),
+            session.effort.clone(),
+        ),
+    }
+}
+
+/// Run the Muse adapter for one session. A Muse run is one
+/// `muse exec` process; the session id is ours from the start
+/// (the CLI takes `--session-id`), so pause, resume, and
+/// follow-up continue the same conversation with a later exec.
+/// Approval mode `never` is broader than Claude's acceptEdits:
+/// it also runs shell commands unasked. The OS sandbox stays on
+/// (no `--yolo`) and the run is inside a throwaway worktree;
+/// T8 owns the permission bridge and must tighten this.
+#[allow(clippy::too_many_arguments)]
+fn spawn_muse(
+    state: Arc<AppState>,
+    session_id: String,
+    cwd: PathBuf,
+    task: String,
+    resume_cli_id: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+) {
+    state.spawning.lock().unwrap().insert(session_id.clone());
+    tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let muse_session_id = resume_cli_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let _ = state.store.set_cli_session_id(&session_id, &muse_session_id);
+        let mut known_cli_id = Some(muse_session_id.clone());
+        let mut args: Vec<String> = vec![
+            "exec".into(),
+            "--json".into(),
+            "--session-id".into(),
+            muse_session_id,
+            "--workspace".into(),
+            cwd.to_string_lossy().into_owned(),
+            "--worktree=off".into(),
+            "--approval-mode".into(),
+            "never".into(),
+            "--disable-reminders".into(),
+        ];
+        if let Some(m) = &model {
+            args.push("--model".into());
+            args.push(m.clone());
+        }
+        if let Some(e) = &effort {
+            args.push("--effort".into());
+            args.push(e.clone());
+        }
+        // `--` keeps a task that starts with `-` out of flag
+        // parsing (proven against the installed CLI).
+        args.push("--".into());
+        args.push(task.clone());
+        let mut child = match tokio::process::Command::new("muse")
+            .args(&args)
+            .current_dir(&cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = state.emit(
+                    &session_id,
+                    Source::System,
+                    EventPayload::SessionFinished {
+                        outcome: Outcome::Failed,
+                        reason: Some(format!("could not start muse: {e}")),
+                    },
+                );
+                let _ = state.store.set_state(&session_id, "failed");
+                state.spawning.lock().unwrap().remove(&session_id);
+                return;
+            }
+        };
+        let Some(stdout) = child.stdout.take() else {
+            // No pipe to read: fail honestly instead of leaving
+            // the session in `working` with no reader. The child
+            // drops here and kill_on_drop stops it.
+            let _ = state.emit(
+                &session_id,
+                Source::System,
+                EventPayload::SessionFinished {
+                    outcome: Outcome::Failed,
+                    reason: Some("muse gave no output stream".to_string()),
+                },
+            );
+            let _ = state.store.set_state(&session_id, "failed");
+            state.spawning.lock().unwrap().remove(&session_id);
+            return;
+        };
+        let my_pid = child.id();
+        // Keep the last stderr lines: startup failures (bad
+        // model, auth) land there, and the failure reason should
+        // carry them instead of a bare "exited".
+        let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let tail = stderr_tail.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut tail = tail.lock().unwrap();
+                    tail.push(line);
+                    if tail.len() > 5 {
+                        tail.remove(0);
+                    }
+                }
+            });
+        }
+        state
+            .children
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), child);
+        state.spawning.lock().unwrap().remove(&session_id);
+        let raw_cwd = cwd.clone();
+        let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+        let mut lines = BufReader::new(stdout).lines();
+        let mut finish_state: Option<&'static str> = None;
+        while let Ok(Some(line)) = lines.next_line().await {
+            if state
+                .store
+                .get_session(&session_id)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.state != "working")
+            {
+                break;
+            }
+            let t = crate::adapters::muse::translate_line(&line);
+            if let Some(cli_id) = &t.cli_session_id {
+                if known_cli_id.as_deref() != Some(cli_id.as_str()) {
+                    let _ = state.store.set_cli_session_id(&session_id, cli_id);
+                    known_cli_id = Some(cli_id.clone());
+                }
+            }
+            for payload in t.events {
+                if let EventPayload::SessionFinished { outcome, .. } = &payload {
+                    finish_state = Some(match outcome {
+                        Outcome::Completed => "finished",
+                        Outcome::Failed => "failed",
+                        Outcome::Stopped => "stopped",
+                    });
+                }
+                let payload = match payload {
+                    EventPayload::FileTouched { path, change } => {
+                        let rel = std::path::Path::new(&path)
+                            .strip_prefix(&cwd)
+                            .or_else(|_| std::path::Path::new(&path).strip_prefix(&raw_cwd))
+                            .map(|p| p.to_string_lossy().replace('\\', "/"))
+                            .unwrap_or(path);
+                        EventPayload::FileTouched { path: rel, change }
+                    }
+                    other => other,
+                };
+                if matches!(payload, EventPayload::SessionFinished { .. })
+                    && state
+                        .store
+                        .get_session(&session_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|s| s.state != "working")
+                {
+                    continue;
+                }
+                let _ = state.emit(&session_id, Source::Cli, payload);
+            }
+            if finish_state.is_some() {
+                break;
+            }
+        }
+        // Take only our own child back: a fast pause->resume may
+        // already have registered the next run under this id.
+        let mut child = {
+            let mut map = state.children.lock().unwrap();
+            if map.get(&session_id).and_then(|c| c.id()) == my_pid {
+                map.remove(&session_id)
+            } else {
+                None
+            }
+        };
+        let stopped_externally = child.is_none()
+            || state
+                .store
+                .get_session(&session_id)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.state != "working");
+        if finish_state.is_some() || stopped_externally {
+            if let Some(c) = child.as_mut() {
+                let _ = c.start_kill();
+            }
+        }
+        let status = match child.as_mut() {
+            Some(c) => c.wait().await.map_err(|e| e.to_string()),
+            None => Err("child already reaped".to_string()),
+        };
+        let stopped_during_wait = state
+            .store
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.state != "working");
+        if stopped_externally || stopped_during_wait {
+            return;
+        }
+        if finish_state.is_none() {
+            let ok = status.map(|s| s.success()).unwrap_or(false);
+            let tail = stderr_tail.lock().unwrap().join(" | ");
+            let _ = state.emit(
+                &session_id,
+                Source::System,
+                EventPayload::SessionFinished {
+                    outcome: if ok {
+                        Outcome::Completed
+                    } else {
+                        Outcome::Failed
+                    },
+                    reason: if ok {
+                        None
+                    } else if tail.is_empty() {
+                        Some("muse exited without a terminal event".to_string())
+                    } else {
+                        Some(format!("muse exited without a terminal event: {tail}"))
+                    },
+                },
+            );
+            let _ = state
+                .store
+                .set_state(&session_id, if ok { "finished" } else { "failed" });
+        } else if let Some(state_name) = finish_state {
+            let _ = state.store.set_state(&session_id, state_name);
+        }
+        // Talk-to-agent: a queued message starts the next run.
+        if state
+            .store
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.state == "finished")
+        {
+            run_pending_message(state.clone(), &session_id).await;
         }
     });
 }
@@ -733,6 +1153,7 @@ async fn pause_session(
         Err(e) => return transition_err(e).into_response(),
     };
     state.teardown_runtime(&id).await;
+    let _ = state.emit(&id, Source::System, EventPayload::SessionPaused);
     let _ = state.emit(&id, Source::System, EventPayload::AgentMessage { text: "Session paused.".to_string() });
     session_json(&session).into_response()
 }
@@ -767,21 +1188,150 @@ async fn resume_session(
     // With a CLI id, resume the conversation. Without one (paused
     // before the CLI init line), a spawned session starts fresh on
     // its task instead of sitting in `working` with no agent.
-    if let Some(task) = session.task.clone() {
-        if session.worktree_path.is_some() {
-            match session.cli_session_id.clone() {
-                Some(cli_id) => spawn_claude(
-                    state.clone(),
-                    id.clone(),
-                    root,
-                    format!("Continue this task: {task}"),
-                    Some(cli_id),
-                ),
-                None => spawn_claude(state.clone(), id.clone(), root, task, None),
-            }
+    if session.worktree_path.is_some() {
+        // A queued message (talk-to-agent while paused) is the
+        // resume instruction when one waits; otherwise the quest
+        // continues its task in the same conversation.
+        let queued = session.pending_task.clone();
+        if let Some(q) = &queued {
+            let _ = state.store.clear_pending_task_if(&id, q);
+        }
+        let prompt = match (queued, session.task.clone()) {
+            (Some(q), _) => Some(q),
+            (None, Some(task)) => Some(match &session.cli_session_id {
+                Some(_) => format!("Continue this task: {task}"),
+                None => task,
+            }),
+            (None, None) => None,
+        };
+        if let Some(prompt) = prompt {
+            spawn_agent(&session, state.clone(), root, prompt, session.cli_session_id.clone());
         }
     }
     session_json(&session).into_response()
+}
+
+/// Send the queued message, if any, as the next run. Called by
+/// both runners right after they land a `finished` state, and by
+/// the message route itself (a message can land just after the
+/// finish check: storing it must still start the run). The move
+/// back to `working` goes through transition_state, so a stop
+/// that landed after the finish wins. The island lock is
+/// re-checked: finishing released the island, and another quest
+/// may hold it now — the message then stays queued, in words.
+async fn run_pending_message(state: Arc<AppState>, session_id: &str) {
+    let Ok(Some(session)) = state.store.get_session(session_id) else {
+        return;
+    };
+    let Some(task) = session.pending_task.clone() else {
+        return;
+    };
+    if session.worktree_path.is_none() {
+        return;
+    }
+    if let Some(island_id) = session.island_id.as_deref() {
+        if let Ok(Some(holder)) =
+            state.store.island_lock_holder(&session.repo_path, island_id, Some(session_id))
+        {
+            let _ = state.emit(
+                session_id,
+                Source::System,
+                EventPayload::AgentMessage {
+                    text: format!(
+                        "Queued message waits: island {island_id} is held by session {}.",
+                        holder.id
+                    ),
+                },
+            );
+            return;
+        }
+    }
+    // Register the spawn before the state move: a /stop in the
+    // gap then finds the marker, waits for the child, and kills
+    // it, instead of reporting success while a run starts.
+    state.spawning.lock().unwrap().insert(session_id.to_string());
+    // Take the message only if it is still the one we read; a
+    // newer queued message survives for the next finish.
+    match state.store.clear_pending_task_if(session_id, &task) {
+        Ok(true) => {}
+        _ => {
+            state.spawning.lock().unwrap().remove(session_id);
+            return;
+        }
+    }
+    let Ok(session) = state.store.transition_state(session_id, &["finished"], "working") else {
+        // The move failed (a stop landed): give the message
+        // back if no newer one replaced it meanwhile.
+        let still_none = state
+            .store
+            .get_session(session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.pending_task.is_none());
+        if still_none {
+            let _ = state.store.set_pending_task(session_id, Some(&task));
+        }
+        state.spawning.lock().unwrap().remove(session_id);
+        return;
+    };
+    let _ = state.store.set_task(session_id, &task);
+    let _ = state.emit(
+        session_id,
+        Source::System,
+        EventPayload::SessionStarted {
+            cli_session_id: session.cli_session_id.clone(),
+        },
+    );
+    let root = PathBuf::from(session.worktree_path.clone().unwrap_or_default());
+    spawn_agent(&session, state, root, task, session.cli_session_id.clone());
+}
+
+/// Message the agent (talk-to-agent). While a run is live the
+/// message queues and runs when the run ends; while paused it
+/// runs on resume. A finished quest takes the follow-up route
+/// instead (the client sends it there); a watch-only quest has
+/// no agent to talk to.
+async fn message_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<FollowUp>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    if body.task.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "message is empty".to_string()).into_response();
+    }
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    if session.worktree_path.is_none() {
+        return err(StatusCode::CONFLICT, "this is a watch-only quest: no agent runs, so there is no one to message".to_string()).into_response();
+    }
+    match session.state.as_str() {
+        "working" | "paused" => {
+            if let Err(e) = state.store.set_pending_task(&id, Some(body.task.trim())) {
+                return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+            }
+            // The run may have finished between the read above
+            // and this store: try the auto-start now, so an
+            // accepted message is never stranded in the queue.
+            // A second message replaces the queued one.
+            if session.state == "working" {
+                run_pending_message(state.clone(), &id).await;
+            }
+            let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
+            session_json(&updated).into_response()
+        }
+        other => err(
+            StatusCode::CONFLICT,
+            format!("quest is {other}: message a working or paused quest, or send a follow-up to a finished one"),
+        )
+        .into_response(),
+    }
 }
 
 /// Archive (T5): a finished, failed, or stopped quest leaves the
@@ -849,7 +1399,7 @@ async fn follow_up_session(
     let root = PathBuf::from(session.worktree_path.as_deref().unwrap_or(&session.repo_path));
     let _ = state.emit(&id, Source::System, EventPayload::SessionStarted { cli_session_id: Some(cli_id.clone()) });
     state.start_watcher(&id, &root);
-    spawn_claude(state.clone(), id.clone(), root, body.task.clone(), Some(cli_id));
+    spawn_agent(&before, state.clone(), root, body.task.clone(), Some(cli_id));
     let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
     session_json(&updated).into_response()
 }
@@ -935,5 +1485,59 @@ async fn ws_socket(state: Arc<AppState>, since_id: i64, socket: WebSocket) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_choice_tests {
+    use super::valid_agent_choices;
+
+    fn v(agent: &str, model: &str, effort: &str) -> Result<(String, Option<String>, Option<String>), String> {
+        valid_agent_choices(
+            &Some(agent.to_string()),
+            &Some(model.to_string()),
+            &Some(effort.to_string()),
+        )
+    }
+
+    #[test]
+    fn claude_aliases_and_full_names_pass() {
+        assert!(v("claude", "opus", "low").is_ok());
+        assert!(v("claude", "sonnet", "xhigh").is_ok());
+        assert!(v("claude", "haiku", "max").is_ok());
+        assert!(v("claude", "claude-opus-4-1", "high").is_ok());
+        assert!(v("claude", "claude-sonnet-5[1m]", "medium").is_ok());
+    }
+
+    #[test]
+    fn muse_names_and_efforts_pass() {
+        assert!(v("muse", "muse-spark-1.3", "ultra").is_ok());
+        assert!(v("muse", "muse-wonder-1.0", "none").is_ok());
+        assert!(v("muse", "muse-wonder-1.0", "minimal").is_ok());
+    }
+
+    #[test]
+    fn blanks_mean_cli_default() {
+        let none: Option<String> = None;
+        assert_eq!(
+            valid_agent_choices(&none, &none, &none).unwrap(),
+            ("claude".to_string(), None, None)
+        );
+        assert_eq!(v("claude", "  ", " ").unwrap().1, None);
+        assert_eq!(v("claude", " opus ", " high ").unwrap().1.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn bad_values_are_refused() {
+        assert!(v("codex", "opus", "low").is_err());
+        assert!(v("claude", "gpt-5", "low").is_err());
+        assert!(v("claude", "opus", "High").is_err());
+        assert!(v("claude", "opus", "ultra").is_err());
+        assert!(v("muse", "opus", "low").is_err());
+        assert!(v("muse", "claude-opus-4-1", "low").is_err());
+        assert!(v("claude", "claude-x y", "low").is_err());
+        assert!(v("claude", "claude-X", "low").is_err());
+        let too_long = format!("claude-{}", "a".repeat(60));
+        assert!(v("claude", &too_long, "low").is_err());
     }
 }

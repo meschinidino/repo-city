@@ -5,6 +5,7 @@
 //! only, never live-agent behavior).
 
 pub mod claude;
+pub mod muse;
 
 /// Translation tallies for one stream. The adapter pass bar (D18) is
 /// judged from these numbers against the watcher denominator.

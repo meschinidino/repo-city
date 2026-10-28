@@ -8,22 +8,215 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Overpass:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
     <style>
-      html, body { margin: 0; background: #13262b; color: #eaf2f0; font-family: "Overpass", system-ui, sans-serif; }
+      /* Harbor bar theme: CSS variables from the DESIGN.md tokens
+         (D-tokens). Every floating surface uses these, no raw palette. */
+      :root {
+        --primary: #E8812B;
+        --primary-hover: #F2934A;
+        --on-primary: #1F1206;
+        --surface: #13262B;
+        --surface-raised: #1C353B;
+        --text: #EAF2F0;
+        --text-muted: #9DB5B8;
+        --accent: #FFE3A3;
+        --success: #3E9A5B;
+        --warning: #E0A33A;
+        --error: #D4402B;
+        --radius-sm: 4px;
+        --radius-md: 6px;
+        --radius-lg: 10px;
+        --radius-full: 9999px;
+      }
+      html, body { margin: 0; background: var(--surface); color: var(--text); font-family: "Overpass", system-ui, sans-serif; }
       #app canvas { display: block; cursor: url("/cursor.png") 3 2, auto; }
-      #status { position: fixed; left: 12px; bottom: 12px; background: rgba(19,38,43,.92); padding: 8px 12px; border-radius: 10px; font-size: 13px; max-width: 90vw; box-shadow: 0 6px 20px rgba(8,24,28,.35); }
-      #status.fail { outline: 2px solid #d4402b; }
-      #controls { position: fixed; right: 12px; bottom: 12px; display: none; gap: 8px; }
-      #controls button { font: 600 13px "Overpass", system-ui, sans-serif; background: #e8812b; color: #1f1206; border: 0; border-radius: 6px; padding: 8px 14px; cursor: url("/cursor.png") 3 2, pointer; box-shadow: 0 6px 20px rgba(8,24,28,.35); }
-      #report { position: fixed; right: 12px; top: 12px; display: none; background: rgba(19,38,43,.94); padding: 12px 14px; border-radius: 10px; font-size: 13px; max-width: 380px; white-space: pre-wrap; box-shadow: 0 6px 20px rgba(8,24,28,.35); }
-      #controls button:hover { background: #f2934a; }
-      #controls button:focus-visible { outline: 2px solid #ffe3a3; outline-offset: 2px; }
+
+      /* Command bar (variant A "Harbor bar"): tokens row over a
+         status strip, along the bottom edge, always visible. */
+      #bar {
+        position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+        background: linear-gradient(180deg, var(--surface-raised), var(--surface) 55%);
+        color: var(--text);
+        border-top: 2px solid var(--primary);
+        box-shadow: 0 -10px 32px rgba(8,24,28,.5);
+        padding: 9px 12px 0;
+      }
+      #bar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      #tokens { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+      .token { flex: none; }
+      .token {
+        display: inline-flex; align-items: center; gap: 8px;
+        min-height: 44px; padding: 5px 14px 5px 8px;
+        background: linear-gradient(180deg, #24444b, var(--surface-raised));
+        color: var(--text);
+        border: 1px solid rgba(234,242,240,.16); border-radius: var(--radius-full);
+        box-shadow: 0 3px 10px rgba(4,16,20,.45), inset 0 1px 0 rgba(234,242,240,.12);
+        font: 600 13px "Overpass", system-ui, sans-serif; cursor: url("/cursor.png") 3 2, pointer;
+        transition: transform 80ms ease;
+      }
+      .token:hover { transform: translateY(-2px); }
+      .token.selected { border-color: var(--accent); background: linear-gradient(180deg, #2e4a42, #213a35); }
+      .token .ship { width: 27px; height: 27px; object-fit: contain; flex: none; }
+      .token:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .dot { width: 9px; height: 9px; border-radius: var(--radius-full); background: var(--text-muted); flex: none; }
+      .dot-working { background: var(--primary); animation: pulse 1.6s ease-in-out infinite; }
+      .dot-paused { background: var(--warning); }
+      .dot-finished { background: var(--success); }
+      .dot-failed { background: var(--error); }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+      #new-quest, .primary-btn {
+        min-height: 44px; padding: 8px 16px;
+        background: var(--primary); color: var(--on-primary);
+        border: 0; border-radius: var(--radius-md);
+        font: 800 13px "Overpass", system-ui, sans-serif; cursor: url("/cursor.png") 3 2, pointer;
+      }
+      #new-quest:hover, .primary-btn:hover { background: var(--primary-hover); }
+      .primary-btn:disabled { background: var(--surface-raised); color: var(--text-muted); cursor: not-allowed; }
+      .ghost-btn {
+        min-height: 44px; padding: 8px 12px;
+        background: transparent; color: var(--text);
+        border: 1px solid var(--text-muted); border-radius: var(--radius-md);
+        font: 600 13px "Overpass", system-ui, sans-serif; cursor: url("/cursor.png") 3 2, pointer;
+      }
+      #status { padding: 7px 2px 9px; font-size: 13px; color: var(--text); }
+      #status.fail { color: #ffb4a3; }
+      #controls { margin-left: auto; display: none; gap: 8px; }
+      #repo-opener { display: none; gap: 8px; align-items: center; }
+      #repo-opener input { min-height: 44px; }
+
+      /* Quest log: card above the bar, right side (variant A). */
+      #questlog {
+        position: fixed; right: 12px; bottom: 118px; z-index: 21;
+        width: min(380px, calc(100vw - 24px)); display: none;
+        box-sizing: border-box;
+        max-height: calc(100dvh - 140px); overflow-y: auto;
+        background: var(--surface); color: var(--text);
+        border-radius: var(--radius-lg); padding: 14px 16px;
+        box-shadow: 0 12px 32px rgba(8,24,28,.45);
+      }
+      #questlog h2 { font: 800 17px "Bricolage Grotesque", sans-serif; margin: 0 0 8px; }
+      @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+      #questlog { animation: rise 200ms ease; }
+      #report { animation: rise 220ms ease; border-left: 4px solid var(--primary); }
+      #questlog label { display: block; font: 800 11px "Overpass", sans-serif; letter-spacing: .06em; color: var(--text-muted); margin: 10px 0 4px; }
+      #questlog input[type="text"], #questlog select, #repo-path {
+        width: 100%; box-sizing: border-box; min-height: 44px;
+        background: var(--surface-raised); color: var(--text);
+        border: 1px solid var(--text-muted); border-radius: var(--radius-sm);
+        padding: 8px 10px; font: 400 14px "Overpass", system-ui, sans-serif;
+      }
+      #cap-note { color: var(--warning); font-size: 13px; margin-top: 8px; display: none; }
+      #msg-note { color: var(--accent); font-size: 13px; margin-top: 6px; display: none; }
+      #agent-feed { margin-top: 10px; max-height: min(180px, 24dvh); overflow-y: auto; display: none; }
+      .questlog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .questlog-head h2 { margin: 0; }
+      #questlog-close { min-height: 36px; padding: 4px 12px; }
+      #agent-feed .feed-msg { font-size: 13px; margin: 6px 0; white-space: pre-wrap; }
+      #agent-feed .feed-reason { font-size: 12px; margin: 6px 0; white-space: pre-wrap; color: var(--text-muted); font-style: italic; }
+      #agent-feed .feed-reason::before { content: "reasoning — "; font-style: normal; font-weight: 800; font-size: 10px; letter-spacing: .06em; }
+      #detail-error { color: #ffb4a3; font-size: 13px; margin-top: 8px; display: none; }
+      #session-detail { border-top: 1px solid rgba(234,242,240,.14); margin-top: 12px; padding-top: 10px; display: none; }
+      #detail-title { font-weight: 800; }
+      #detail-state { color: var(--text-muted); font-size: 13px; margin: 2px 0 8px; }
+      .action-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+      /* Report card: beside its island (D-report-place), clamped
+         by main.ts; the leader line is a plain rotated rule. */
+      #report {
+        position: fixed; z-index: 22; display: none;
+        background: var(--surface); color: var(--text);
+        padding: 12px 14px; border-radius: var(--radius-lg);
+        font-size: 13px; width: min(380px, calc(100vw - 24px));
+        box-sizing: border-box; max-height: 60vh; overflow-y: auto;
+        white-space: pre-wrap; box-shadow: 0 12px 32px rgba(8,24,28,.45);
+      }
+      #report-line {
+        position: fixed; z-index: 21; display: none; height: 2px;
+        background: var(--accent); transform-origin: 0 50%; opacity: .8;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #questlog, #report { animation: none; }
+      }
+
+      /* D-mobile: compact tokens, full-width quest log sheet. */
+      @media (max-width: 720px) {
+        .token { padding: 6px 10px; }
+        .token-text { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #questlog { left: 0; right: 0; width: auto; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+        #status { font-size: 12px; }
+      }
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <div id="status">Loading sprite sheets…</div>
-    <div id="controls"><button id="stop-report" type="button">Stop &amp; report</button></div>
+
+    <section id="questlog" aria-label="Quest log">
+      <div class="questlog-head">
+        <h2>Quests</h2>
+        <button id="questlog-close" class="ghost-btn" type="button">Close</button>
+      </div>
+      <label for="quest-task">Quest, in plain English</label>
+      <input id="quest-task" type="text" placeholder="Fix the failing sales test" />
+      <label for="island-select">Target island (or click the map)</label>
+      <select id="island-select"></select>
+      <label for="agent-select">Agent</label>
+      <select id="agent-select">
+        <option value="agent">Claude agent (works in its own worktree)</option>
+        <option value="muse">Muse agent (works in its own worktree)</option>
+        <option value="watch">Watch only (no agent; the map follows real edits)</option>
+      </select>
+      <label for="model-select">Model</label>
+      <select id="model-select"></select>
+      <label for="effort-select">Effort</label>
+      <select id="effort-select"></select>
+      <div class="action-row">
+        <button id="create-btn" class="primary-btn" type="button">Start quest</button>
+      </div>
+      <p id="cap-note"></p>
+      <div id="session-detail">
+        <div id="detail-title"></div>
+        <div id="detail-state"></div>
+        <div class="action-row">
+          <button id="act-pause" class="ghost-btn" type="button">Pause</button>
+          <button id="act-resume" class="ghost-btn" type="button">Resume</button>
+          <button id="act-stop" class="ghost-btn" type="button">Stop</button>
+          <button id="act-archive" class="ghost-btn" type="button">Archive</button>
+          <button id="act-report" class="ghost-btn" type="button">Report</button>
+        </div>
+        <label for="follow-task">Follow-up</label>
+        <input id="follow-task" type="text" placeholder="Also check the invoice totals" />
+        <div class="action-row">
+          <button id="act-follow" class="ghost-btn" type="button">Send follow-up</button>
+        </div>
+        <div id="msg-row">
+          <label for="msg-task">Message the agent</label>
+          <input id="msg-task" type="text" placeholder="Also look at the totals column" />
+          <div class="action-row">
+            <button id="act-msg" class="ghost-btn" type="button">Send message</button>
+          </div>
+          <p id="msg-note"></p>
+        </div>
+        <div id="agent-feed" aria-label="Agent replies and reasoning"></div>
+      </div>
+      <p id="detail-error"></p>
+    </section>
+
+    <div id="report-line"></div>
     <div id="report"></div>
+    <button id="report-close" class="ghost-btn" type="button" style="display:none; position:fixed; z-index:23; min-height:32px; padding:2px 10px;">Close</button>
+
+    <footer id="bar">
+      <div id="bar-row">
+        <button id="new-quest" type="button">New quest</button>
+        <div id="tokens"></div>
+        <form id="repo-opener">
+          <input id="repo-path" type="text" placeholder="Path to a repo" aria-label="Path to a repo" />
+          <button class="primary-btn" type="submit">Open</button>
+        </form>
+        <div id="controls"><button id="stop-report" class="primary-btn" type="button">Stop &amp; report</button></div>
+      </div>
+      <div id="status">Loading sprite sheets…</div>
+    </footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

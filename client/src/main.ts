@@ -5,8 +5,10 @@ import { occlusion } from "./map/placement";
 import { PASS } from "./map/checks";
 import { layoutCity } from "./city/layoutCity";
 import { CityView } from "./city/renderCity";
-import { connectEvents, createSession, fetchExtraction, fetchReport, loadFailureText, stopSession, type SessionInfo } from "./city/live";
+import { connectEvents, createSession, fetchExtraction, fetchReport, fetchSessionEvents, loadFailureText, stopSession, type SessionInfo } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
+import { HarborBar } from "./city/bar";
+import type { SessionInfo as BarSession } from "./city/live";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
 import coastUrl from "../../assets/sprites/coast.png";
@@ -48,6 +50,14 @@ async function loadWorld(status: HTMLElement) {
 async function mapMain(status: HTMLElement) {
   const world = await loadWorld(status);
   if (!world) return;
+  document.getElementById("new-quest")!.style.display = "none";
+  const opener = document.getElementById("repo-opener")! as HTMLFormElement;
+  opener.style.display = "flex";
+  opener.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const path = (document.getElementById("repo-path") as HTMLInputElement).value.trim();
+    if (path) location.search = `?repo=${encodeURIComponent(path)}`;
+  });
   const params = new URLSearchParams(location.search);
   const TW = params.get("full") ? 200 : Math.min(140, (innerWidth * Math.min(2, devicePixelRatio || 1)) / 21);
   const app = await renderWorld(world, TW);
@@ -95,10 +105,96 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     status.classList.add("fail");
     return;
   }
+  // Harbor bar (T12): tokens for every session of this repo, the
+  // quest log, and the report card. The event flow below still
+  // follows this primary session.
+  const bar = new HarborBar({
+    server,
+    repo,
+    islands: layout.islands.map((i) => ({ id: i.id, name: i.name })),
+    onShowReport: (s) => void showReport(s),
+    onTargetPicked: (id) => city.selectIsland(id),
+    onSessionsChanged: () => {},
+    onFollow: (s) => void follow(s),
+  });
+  city.onCanvasClick = (sx, sy) => {
+    const id = city.islandAtScreen(sx, sy);
+    if (id) {
+      city.selectIsland(id);
+      bar.setTargetIsland(id);
+    } else {
+      // Open water: the quest closes (owner call).
+      city.selectIsland(null);
+      bar.closeQuest();
+    }
+  };
+  void bar.refresh();
+  // The quest log sits directly above the bar. The bar height
+  // changes when its rows wrap (narrow windows), so measure it
+  // instead of a fixed offset (QA: create button overlapped the
+  // bar buttons at 360px wide).
+  const placeQuestlog = () => {
+    const barEl = document.getElementById("bar")!;
+    const logEl = document.getElementById("questlog")!;
+    logEl.style.bottom = `${barEl.offsetHeight + 8}px`;
+    // Cap the height against the same measured bar, so a tall
+    // (wrapped) bar cannot push the sheet top off-screen.
+    logEl.style.maxHeight = `min(calc(100dvh - ${barEl.offsetHeight + 16}px), 82dvh)`;
+  };
+  placeQuestlog();
+  window.addEventListener("resize", placeQuestlog);
+  // The bar can also grow later (status text wraps, tokens are
+  // added), so watch its size, not only window resizes.
+  new ResizeObserver(placeQuestlog).observe(document.getElementById("bar")!);
+  // Tokens follow every session, not only the primary one: poll
+  // the list, and re-anchor an open report card as the camera moves.
+  setInterval(() => void bar.refresh(), 5000);
+  setInterval(() => {
+    const el = document.getElementById("report")!;
+    if (el.style.display === "block") placeReportCard(reportIsland);
+  }, 750);
+  window.addEventListener("resize", () => {
+    const el = document.getElementById("report")!;
+    if (el.style.display === "block") placeReportCard(reportIsland);
+  });
+
   // No island is chosen at creation (quest targeting is T12), so the
   // ship has no home: it stays off-screen until a real event places
   // it. Drawing it at the biggest island would invent a location.
   let view: SessionView = initialView(session.id, session.island_id);
+  // The quest the map follows: the primary session until the
+  // user picks another in the bar. Stop & report acts on this
+  // quest, never silently on the primary (Codex review).
+  let followed: BarSession = session;
+  let followGen = 0;
+  let replayBuffer: { id: string; events: StoredEvent[] } | null = null;
+  const follow = async (target: BarSession | null) => {
+    const quest = target ?? session;
+    followed = quest;
+    const gen = ++followGen;
+    view = initialView(quest.id, quest.island_id);
+    exposed.view = view;
+    refresh();
+    // Live events for this quest buffer while its log replays,
+    // then merge in seq order (the reducer drops duplicates),
+    // so no early history is lost to a fast live event.
+    replayBuffer = { id: quest.id, events: [] };
+    try {
+      const events = await fetchSessionEvents(server, quest.id);
+      if (gen !== followGen) return; // a newer pick owns the map
+      for (const event of events) view = applyEvent(view, event, layout.fileToIsland);
+    } catch {
+      // No replay available: live events still land on the
+      // followed quest; nothing is invented meanwhile.
+    }
+    if (gen !== followGen) return;
+    const buffered = replayBuffer?.id === quest.id ? replayBuffer.events : [];
+    replayBuffer = null;
+    for (const event of buffered.sort((a, b) => a.seq - b.seq)) {
+      view = applyEvent(view, event, layout.fileToIsland);
+    }
+    refresh();
+  };
   const exposed = { layout, view, session, report: null as unknown, city };
   (window as unknown as { __city: unknown }).__city = exposed;
   const droppedNote =
@@ -115,16 +211,78 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   };
   refresh();
 
-  const showReport = async () => {
+  // Report card beside its island (D-report-place), clamped to
+  // the viewport, with a leader line to the island. Without an
+  // island it docks to the right edge. Step 4 shows the report
+  // plus one honest line; actions arrive in step 5 (D-card-actions).
+  const placeReportCard = (islandId: string | null) => {
     const el = document.getElementById("report")!;
+    const line = document.getElementById("report-line")!;
     el.style.display = "block";
+    const w = Math.min(380, window.innerWidth - 24);
+    const anchor = islandId ? city.islandScreenPos(islandId) : null;
+    if (!anchor) {
+      el.style.left = `${Math.max(8, window.innerWidth - w - 12)}px`;
+      el.style.top = "12px";
+      line.style.display = "none";
+      const close0 = document.getElementById("report-close")!;
+      close0.style.display = "block";
+      close0.style.left = `${Math.max(8, window.innerWidth - w - 12) + w - 76}px`;
+      close0.style.top = "20px";
+      return;
+    }
+    const left = Math.min(Math.max(8, anchor[0] - w / 2), Math.max(8, window.innerWidth - w - 8));
+    // Above the island when below would bury the card in the bar.
+    // Measure both: the bar grows when it wraps (narrow windows),
+    // and the card height depends on its content.
+    const barH = document.getElementById("bar")!.offsetHeight;
+    const h = el.offsetHeight;
+    let top = anchor[1] + 16;
+    let below = true;
+    if (top + h > window.innerHeight - barH - 8) {
+      top = anchor[1] - h - 16;
+      below = false;
+    }
+    top = Math.max(8, Math.min(top, Math.max(8, window.innerHeight - barH - 8 - h)));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    const cx = left + w / 2;
+    const dx = cx - anchor[0];
+    const dy = (below ? top + h : top) - anchor[1];
+    line.style.display = "block";
+    line.style.left = `${anchor[0]}px`;
+    line.style.top = `${anchor[1]}px`;
+    line.style.width = `${Math.hypot(dx, dy)}px`;
+    line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    const close = document.getElementById("report-close")!;
+    close.style.display = "block";
+    close.style.left = `${left + w - 76}px`;
+    close.style.top = `${top + 8}px`;
+  };
+  document.getElementById("report-close")!.addEventListener("click", () => {
+    document.getElementById("report")!.style.display = "none";
+    document.getElementById("report-line")!.style.display = "none";
+    document.getElementById("report-close")!.style.display = "none";
+  });
+
+  let reportSeq = 0;
+  let reportIsland: string | null = null;
+  const showReport = async (forSession: BarSession = session) => {
+    const seq = ++reportSeq;
+    reportIsland = forSession.island_id;
+    const el = document.getElementById("report")!;
+    el.textContent = "Loading the report…";
+    placeReportCard(reportIsland);
     try {
-      const report = await fetchReport(server, session.id);
-      exposed.report = report;
-      el.textContent = report.available
+      const report = await fetchReport(server, forSession.id);
+      if (seq !== reportSeq) return; // a newer report owns the card
+      if (forSession.id === session.id) exposed.report = report;
+      el.textContent = (report.available
         ? `Report (${report.generated_by})\n${report.summary}`
-        : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`;
+        : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`)
+        + "\n\nFinish flow arrives in step 5.";
     } catch (e) {
+      if (seq !== reportSeq) return;
       el.textContent = `Report unavailable\nCould not fetch the report: ${(e as Error).message}. The raw events are in the server log; no report was invented.`;
       status.classList.add("fail");
       refresh(" · report fetch failed");
@@ -141,11 +299,16 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
       lastEventId,
       (event: StoredEvent) => {
         lastEventId = Math.max(lastEventId, event.id);
+        if (replayBuffer && event.session_id === replayBuffer.id) {
+          replayBuffer.events.push(event);
+          return;
+        }
         const before = view;
         view = applyEvent(view, event, layout.fileToIsland);
         if (view !== before) {
           refresh();
-          if (event.type === "session_finished") void showReport();
+          if (event.type === "session_finished" && event.session_id === session.id) { void showReport(); void bar.refresh(); }
+          else if (event.type === "session_finished") { void bar.refresh(); }
         }
       },
       (state) => {
@@ -173,13 +336,14 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   controls.style.display = "flex";
   document.getElementById("stop-report")!.addEventListener("click", async () => {
     try {
-      await stopSession(server, session.id);
+      await stopSession(server, followed.id);
     } catch (e) {
       status.classList.add("fail");
-      refresh(` · stop failed: ${(e as Error).message} (the session may still be running)`);
+      refresh(` · stop failed: ${(e as Error).message} (this click stopped nothing)`);
       return;
     }
-    await showReport();
+    await showReport(followed);
+    void bar.refresh();
     refresh();
   });
 }

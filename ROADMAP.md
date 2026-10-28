@@ -49,10 +49,11 @@ Work:
   - **▸ gstack `/qa`** on the gate journey in the browser: open a repo, start a session, watch real events, read the report.
   - **▸ gstack `/design-review`** on the rendered map at full size against DESIGN.md.
 
-## 4. Quests and the command bar (session CRUD) — in progress: plan and mocks done, T5 done, T12 next
+## 4. Quests and the command bar (session CRUD) — done (2026-10-28: PR #18 merged after owner pass)
 
 - **▸ gstack `/plan-design-review`** first: the eng review approved a "city with districts"; review the archipelago plan's UI (command bar, quest log, report card, every empty, stalled and failed state) before building it.
-- T12: mock the command bar, quest log and report card against DESIGN.md, then build them with their empty, stalled, failed and report-unavailable states.
+- T12: mock the command bar, quest log and report card against DESIGN.md, then build them with their empty, stalled, failed and report-unavailable states. Built 2026-10-28 (specs/2026-10-28-harbor-bar/): Harbor bar tokens, quest log CRUD on the T5 routes, report card beside its island, CSS token variables, mobile sheet. Owner rounds after the first build added: model/effort with Muse as a second agent, the ship dock on the picked quest, the agent feed (replies; reasoning when a stream carries it), talk-to-agent (queued messages), panel close on water click, and the responsive fit. Owner passed it 2026-10-28 ("quite acceptable"); PR #18 merged. Still owed: one Opus review pass over the last two rounds (both reviewers were at usage limits).
+- Owner todo (2026-10-28): a sprite for bridge corners. Bent bridges turn with straight tiles today and read badly; the corner piece goes through the sprite pipeline (brief, two runs, measured pick) like the other bridge art.
   - **▸ gstack `/design-shotgun`** for mock variants, then **`/design-html`** to turn the chosen one into production HTML/CSS. The gstack designer needs an OpenAI API key (`~/.claude/skills/gstack/design/dist/design setup`); without one, generate mocks with Codex image generation the way the sprites were made (`assets/briefs/`).
 - T5: worktree per session; create, pause (stop plus resume by session id), stop, archive; island locks; shared read-only dependencies. Done (PR #15, 2026-10-27): pause/resume/archive/follow-up routes, worktrees under `~/.repo-city/worktrees/`, island locks, 3-quest cap. The live pause/resume test with a real Claude process is still open.
 - Quests in plain English, with the target island and model chosen at creation.

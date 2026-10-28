@@ -61,6 +61,17 @@ pub enum EventPayload {
     AgentMessage {
         text: String,
     },
+    /// The agent's own reasoning text, when the CLI stream
+    /// carries it (Claude thinking blocks). Muse's stream
+    /// carries only a reasoning token count, so Muse quests
+    /// never produce this event; nothing is invented for them.
+    AgentReasoning {
+        text: String,
+    },
+    /// The quest paused: process dead, conversation kept. The
+    /// map needs this as a state, not a chat line, or a paused
+    /// quest replays as working (Codex review).
+    SessionPaused,
     SessionFinished {
         outcome: Outcome,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,6 +92,9 @@ impl EventPayload {
                 *summary = redact::redact_text(summary, secrets);
             }
             EventPayload::AgentMessage { text } => {
+                *text = redact::redact_text(text, secrets);
+            }
+            EventPayload::AgentReasoning { text } => {
                 *text = redact::redact_text(text, secrets);
             }
             EventPayload::SessionFinished {

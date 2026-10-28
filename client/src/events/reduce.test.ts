@@ -85,4 +85,27 @@ describe("event reduction (simulated events)", () => {
     expect(v.state).toBe("failed");
     expect(v.lastSeq).toBe(4);
   });
+
+  it("a paused quest reads paused on the map, then working again on resume", () => {
+    let v = initialView("s1", "api");
+    v = applyEvent(v, ev({ type: "session_started", seq: 1, source: "system" }), FILES);
+    v = applyEvent(v, ev({ type: "session_paused", seq: 2, source: "system" }), FILES);
+    expect(v.state).toBe("paused");
+    v = applyEvent(v, ev({ type: "session_started", seq: 3, source: "system" }), FILES);
+    expect(v.state).toBe("working");
+  });
+
+  it("reasoning lands apart from replies, and the ship docks at the home island", () => {
+    let v = initialView("s1", "api");
+    expect(v.shipIsland).toBe("api");
+    v = applyEvents(v, [
+      ev({ type: "session_started", seq: 1, source: "system" }),
+      ev({ type: "agent_reasoning", seq: 2, source: "cli", text: "check the parser" }),
+      ev({ type: "agent_message", seq: 3, source: "cli", text: "on it" }),
+    ], FILES);
+    expect(v.reasoning).toEqual(["check the parser"]);
+    expect(v.messages).toEqual(["on it"]);
+    expect(v.state).toBe("working");
+    expect(v.shipIsland).toBe("api");
+  });
 });
