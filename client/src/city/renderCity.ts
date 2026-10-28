@@ -52,6 +52,7 @@ export class CityView {
     deck: ReturnType<typeof cityBridgeDeck>;
     points: { gx: number; gy: number }[];
     segs: [{ gx: number; gy: number }, { gx: number; gy: number }][];
+    clear: boolean;
     dirs: { gx: number; gy: number }[][];
   }[] = [];
 
@@ -163,7 +164,7 @@ export class CityView {
         // broken, duplicated bridges (owner call). Placement
         // (annealPlacement) works to make strong pairs
         // neighbours so this rule keeps most of them.
-        if (pair.segs.length !== 1) continue;
+        if (!pair.clear) continue;
         // One deck height per import count, same in every
         // direction. A projected width made some decks thin.
         // Only water segments draw: no deck runs through an
@@ -495,6 +496,8 @@ export class CityView {
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
           segs: waterSegments(deckPoints, (gx, gy) => landSet.has(gx + "," + gy)),
+          clear: deckPoints.every((_, i) => i + 1 >= deckPoints.length
+            || waterSegments([deckPoints[i], deckPoints[i + 1]], (gx, gy) => landSet.has(gx + "," + gy)).length === 1),
           dirs: pair.dirs.map((dir) => (dir.from === br.from ? shorePoints : [...shorePoints].reverse())),
         });
       }
@@ -626,7 +629,7 @@ export class CityView {
       let gi = 0;
       for (const pair of this.bridgePairs) {
         if (pair.count < 15) continue;
-        if (pair.segs.length !== 1) continue; // no deck, no glow (harbour rule)
+        if (!pair.clear) continue; // no deck, no glow (harbour rule)
         for (const points of pair.dirs) {
           gi++;
           const spr = new Sprite(this.glowTexs[0]);

@@ -353,7 +353,12 @@ function segHitsRect(
     const d2 = cross(c, d, b);
     const d3 = cross(a, b, c);
     const d4 = cross(a, b, d);
-    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+    if (d1 === 0 && d2 === 0 && d3 === 0 && d4 === 0) {
+      // Collinear: hit only when the projections overlap.
+      return Math.max(Math.min(a.gx, b.gx), Math.min(c.gx, d.gx)) <= Math.min(Math.max(a.gx, b.gx), Math.max(c.gx, d.gx))
+        && Math.max(Math.min(a.gy, b.gy), Math.min(c.gy, d.gy)) <= Math.min(Math.max(a.gy, b.gy), Math.max(c.gy, d.gy));
+    }
+    return ((d1 >= 0 && d2 <= 0) || (d1 <= 0 && d2 >= 0)) && ((d3 >= 0 && d4 <= 0) || (d3 <= 0 && d4 >= 0));
   };
   return edges.some(([e1, e2]) => segInt(p, q, e1, e2));
 }
@@ -370,7 +375,14 @@ function pairPath(
   const axis = bridgeAxisLegs(ra, rb);
   if (axis) return [axis[0], axis[1]];
   const span = bridgeSpan(ra, rb);
-  return span ? [span[0], span[1]] : [{ gx: a.px + a.cols / 2, gy: a.py + a.rows / 2 }, { gx: b.px + b.cols / 2, gy: b.py + b.rows / 2 }];
+  if (!span) return [{ gx: a.px + a.cols / 2, gy: a.py + a.rows / 2 }, { gx: b.px + b.cols / 2, gy: b.py + b.rows / 2 }];
+  // Same elbow the renderer draws (spanLegs in renderCity.ts):
+  // straight only near a map axis, else two legs along the axes.
+  const dx = Math.abs(span[1].gx - span[0].gx);
+  const dy = Math.abs(span[1].gy - span[0].gy);
+  if (Math.min(dx, dy) <= Math.max(dx, dy) * 0.35) return [span[0], span[1]];
+  const elbow = dx >= dy ? { gx: span[1].gx, gy: span[0].gy } : { gx: span[0].gx, gy: span[1].gy };
+  return [span[0], elbow, span[1]];
 }
 
 /**
@@ -397,7 +409,9 @@ export function repairBridges(items: PlaceItem[], bridges: { from_island: string
     strong.push({ a, b, w: br.count });
   }
   strong.sort((x, y) => y.w - x.w);
-  const rectOf = (i: number): GridRect => ({ x: items[i].px, y: items[i].py, w: items[i].cols, h: items[i].rows });
+  // Land reaches one cell (0.5 plot) past the rect as shore
+  // margin, so the checked rect grows by that much.
+  const rectOf = (i: number): GridRect => ({ x: items[i].px - 0.5, y: items[i].py - 0.5, w: items[i].cols + 1, h: items[i].rows + 1 });
   const pathClear = (a: number, b: number): boolean => {
     const pts = pairPath(items[a], items[b]);
     return items.every((_, j) => {
@@ -407,20 +421,23 @@ export function repairBridges(items: PlaceItem[], bridges: { from_island: string
       return true;
     });
   };
-  const splitCountFor = (i: number): number =>
-    strong.filter((p) => (p.a === i || p.b === i) && !pathClear(p.a, p.b)).length;
+  const splitCountFor = (): number =>
+    strong.filter((p) => !pathClear(p.a, p.b)).length;
   const overlapsAt = (i: number, x: number, y: number) =>
     items.some((o, j) => j !== i && x < o.px + o.cols + GAP_PLOTS && o.px < x + items[i].cols + GAP_PLOTS
       && y < o.py + o.rows + GAP_PLOTS && o.py < y + items[i].rows + GAP_PLOTS);
   for (let pass = 0; pass < 2; pass++) {
     for (const pair of strong) {
       if (pathClear(pair.a, pair.b)) continue;
-      // Move the smaller island; ties move b.
+      // Move the lighter island (less total bridge weight, then
+      // smaller area): leaves move, hubs stay in the middle.
+      const wA = strong.filter((p) => p.a === pair.a || p.b === pair.a).reduce((n, p) => n + p.w, 0);
+      const wB = strong.filter((p) => p.a === pair.b || p.b === pair.b).reduce((n, p) => n + p.w, 0);
       const sizeA = items[pair.a].cols * items[pair.a].rows;
       const sizeB = items[pair.b].cols * items[pair.b].rows;
-      const mover = sizeA < sizeB ? pair.a : pair.b;
+      const mover = wA !== wB ? (wA < wB ? pair.a : pair.b) : (sizeA < sizeB ? pair.a : pair.b);
       const anchorI = mover === pair.a ? pair.b : pair.a;
-      const before = splitCountFor(mover);
+      const before = splitCountFor();
       const ox = items[mover].px;
       const oy = items[mover].py;
       const anchorC = { x: items[anchorI].px + items[anchorI].cols / 2, y: items[anchorI].py + items[anchorI].rows / 2 };
@@ -433,7 +450,7 @@ export function repairBridges(items: PlaceItem[], bridges: { from_island: string
           if (overlapsAt(mover, x, y)) continue;
           items[mover].px = x;
           items[mover].py = y;
-          const ok = pathClear(pair.a, pair.b) && splitCountFor(mover) < before;
+          const ok = pathClear(pair.a, pair.b) && splitCountFor() < before;
           items[mover].px = ox;
           items[mover].py = oy;
           if (!ok) continue;
