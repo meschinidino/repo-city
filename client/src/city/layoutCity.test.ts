@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth, waterSegments } from "./layoutCity";
+import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth, repairBridges, waterSegments } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -177,6 +177,27 @@ describe("bridgeAxisLegs (owner: direction assets, straight one-axis bridges)", 
   });
   it("no overlap on either axis gives null (caller bends)", () => {
     expect(bridgeAxisLegs({ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 20, w: 10, h: 10 })).toBeNull();
+  });
+});
+
+describe("repairBridges (owner: move the island, not the bridge)", () => {
+  it("moves the smaller end next to its partner when an island sits between", () => {
+    const items = [
+      { isl: { id: "a" }, cols: 4, rows: 4, px: 0, py: 0 },
+      { isl: { id: "c" }, cols: 4, rows: 4, px: 10, py: 0 },
+      { isl: { id: "b" }, cols: 4, rows: 4, px: 20, py: 0 },
+    ];
+    const before = Math.hypot(items[2].px - items[0].px, items[2].py - items[0].py);
+    repairBridges(items, [{ from_island: "a", to_island: "b", count: 20 }]);
+    const after = Math.hypot(items[2].px - items[0].px, items[2].py - items[0].py);
+    expect(after).toBeLessThan(before);
+    // and no overlaps with the gap
+    for (let i = 0; i < items.length; i++)
+      for (let j = i + 1; j < items.length; j++) {
+        const A = items[i], B = items[j];
+        const overlap = A.px < B.px + B.cols + 2 && B.px < A.px + A.cols + 2 && A.py < B.py + B.rows + 2 && B.py < A.py + A.rows + 2;
+        expect(overlap).toBe(false);
+      }
   });
 });
 

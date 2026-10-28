@@ -224,6 +224,231 @@ export interface CityLayout {
  * expanding rings around the import-weighted centre of the
  * islands already placed. Seeded jitter per island. No overlaps.
  */
+/** Deterministic RNG (mulberry32) so the layout never changes
+ * between loads of the same repo. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type PlaceItem = { isl: { id: string }; cols: number; rows: number; px: number; py: number };
+
+/**
+ * Bridge-first annealing. The greedy pass gives a legal layout;
+ * this pass moves islands to cut the bridge cost: sum over pairs
+ * of sqrt(count) x centre-distance squared, plus a compactness
+ * term on the bounding box. Strong pairs pull together until
+ * they are neighbours, so a strong bridge becomes a short hop
+ * over open water instead of a line across the map (the root
+ * fault behind the bridge complaints). Deterministic: the RNG
+ * is seeded from the island ids. No overlaps, ever.
+ */
+export function annealPlacement(items: PlaceItem[], bridges: { from_island: string; to_island: string; count: number }[]): void {
+  if (items.length < 3) return;
+  const idx = new Map(items.map((it, i) => [it.isl.id, i]));
+  const pairs: { a: number; b: number; w: number }[] = [];
+  const pairByKey = new Map<string, { a: number; b: number; w: number }>();
+  for (const br of bridges) {
+    const a = idx.get(br.from_island);
+    const b = idx.get(br.to_island);
+    if (a === undefined || b === undefined || a === b) continue;
+    const key = a < b ? a + "|" + b : b + "|" + a;
+    const existing = pairByKey.get(key);
+    if (existing) {
+      existing.w = Math.max(existing.w, br.count);
+      continue;
+    }
+    const p = { a, b, w: br.count };
+    pairByKey.set(key, p);
+    pairs.push(p);
+  }
+  if (!pairs.length) return;
+  const overlapsAny = (i: number, x: number, y: number) =>
+    items.some((o, j) => j !== i && x < o.px + o.cols + GAP_PLOTS && o.px < x + items[i].cols + GAP_PLOTS
+      && y < o.py + o.rows + GAP_PLOTS && o.py < y + items[i].rows + GAP_PLOTS);
+  const cost = (): number => {
+    let e = 0;
+    for (const p of pairs) {
+      const A = items[p.a];
+      const B = items[p.b];
+      const dx = A.px + A.cols / 2 - (B.px + B.cols / 2);
+      const dy = A.py + A.rows / 2 - (B.py + B.rows / 2);
+      e += Math.sqrt(p.w) * (dx * dx + dy * dy);
+    }
+    const w = Math.max(...items.map((i) => i.px + i.cols)) - Math.min(...items.map((i) => i.px));
+    const h = Math.max(...items.map((i) => i.py + i.rows)) - Math.min(...items.map((i) => i.py));
+    return e + 1.5 * w * h;
+  };
+  const rand = mulberry32(hashSeed(items.map((i) => i.isl.id).sort().join("|")));
+  let cur = cost();
+  const iters = Math.min(24000, 400 * items.length);
+  for (let k = 0; k < iters; k++) {
+    const temp = 400 * Math.pow(0.004, k / iters) + 0.5;
+    const i = Math.floor(rand() * items.length);
+    const it = items[i];
+    const ox = it.px;
+    const oy = it.py;
+    let j = -1;
+    let jx = 0;
+    let jy = 0;
+    if (rand() < 0.25) {
+      // Swap two islands: helps big islands move in a full city.
+      j = Math.floor(rand() * items.length);
+      if (j === i) continue;
+      jx = items[j].px;
+      jy = items[j].py;
+      it.px = jx; it.py = jy;
+      items[j].px = ox; items[j].py = oy;
+      if (overlapsAny(i, it.px, it.py) || overlapsAny(j, ox, oy)) {
+        it.px = ox; it.py = oy; items[j].px = jx; items[j].py = jy;
+        continue;
+      }
+    } else {
+      const range = temp > 60 ? 7 : 3;
+      it.px += Math.floor(rand() * (range * 2 + 1)) - range;
+      it.py += Math.floor(rand() * (range * 2 + 1)) - range;
+      if (overlapsAny(i, it.px, it.py)) {
+        it.px = ox; it.py = oy;
+        continue;
+      }
+    }
+    const next = cost();
+    if (next <= cur || rand() < Math.exp(-(next - cur) / temp)) {
+      cur = next;
+    } else {
+      if (j >= 0) { items[j].px = jx; items[j].py = jy; }
+      it.px = ox; it.py = oy;
+    }
+  }
+}
+
+/** Does the segment p-q touch the rect (plot units)? */
+function segHitsRect(
+  p: { gx: number; gy: number },
+  q: { gx: number; gy: number },
+  r: GridRect,
+): boolean {
+  const inside = (pt: { gx: number; gy: number }) =>
+    pt.gx >= r.x && pt.gx <= r.x + r.w && pt.gy >= r.y && pt.gy <= r.y + r.h;
+  if (inside(p) || inside(q)) return true;
+  const edges: [{ gx: number; gy: number }, { gx: number; gy: number }][] = [
+    [{ gx: r.x, gy: r.y }, { gx: r.x + r.w, gy: r.y }],
+    [{ gx: r.x + r.w, gy: r.y }, { gx: r.x + r.w, gy: r.y + r.h }],
+    [{ gx: r.x + r.w, gy: r.y + r.h }, { gx: r.x, gy: r.y + r.h }],
+    [{ gx: r.x, gy: r.y + r.h }, { gx: r.x, gy: r.y }],
+  ];
+  const cross = (a: { gx: number; gy: number }, b: { gx: number; gy: number }, c: { gx: number; gy: number }) =>
+    (b.gx - a.gx) * (c.gy - a.gy) - (b.gy - a.gy) * (c.gx - a.gx);
+  const segInt = (
+    a: { gx: number; gy: number }, b: { gx: number; gy: number },
+    c: { gx: number; gy: number }, d: { gx: number; gy: number },
+  ) => {
+    const d1 = cross(c, d, a);
+    const d2 = cross(c, d, b);
+    const d3 = cross(a, b, c);
+    const d4 = cross(a, b, d);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  };
+  return edges.some(([e1, e2]) => segInt(p, q, e1, e2));
+}
+
+/** The bridge path (plot units) between two placed items, the
+ * same choice the renderer makes: straight on one axis when the
+ * rectangles overlap, else shore-to-shore. */
+function pairPath(
+  a: PlaceItem,
+  b: PlaceItem,
+): { gx: number; gy: number }[] {
+  const ra: GridRect = { x: a.px, y: a.py, w: a.cols, h: a.rows };
+  const rb: GridRect = { x: b.px, y: b.py, w: b.cols, h: b.rows };
+  const axis = bridgeAxisLegs(ra, rb);
+  if (axis) return [axis[0], axis[1]];
+  const span = bridgeSpan(ra, rb);
+  return span ? [span[0], span[1]] : [{ gx: a.px + a.cols / 2, gy: a.py + a.rows / 2 }, { gx: b.px + b.cols / 2, gy: b.py + b.rows / 2 }];
+}
+
+/**
+ * Bridge repair (owner diagnosis, second half): after annealing,
+ * walk the strong pairs (15+ imports) in count order. When an
+ * island sits between a pair, try to move the smaller island to
+ * a free spot next to its partner. A move sticks only when the
+ * pair's path becomes clear and the moved island's other strong
+ * pairs do not get worse in total. Two passes, deterministic.
+ */
+export function repairBridges(items: PlaceItem[], bridges: { from_island: string; to_island: string; count: number }[]): void {
+  if (items.length < 3) return;
+  const idx = new Map(items.map((it, i) => [it.isl.id, i]));
+  const strong: { a: number; b: number; w: number }[] = [];
+  const seenPair = new Set<string>();
+  for (const br of bridges) {
+    if (br.count < 15) continue;
+    const a = idx.get(br.from_island);
+    const b = idx.get(br.to_island);
+    if (a === undefined || b === undefined || a === b) continue;
+    const key = a < b ? a + "|" + b : b + "|" + a;
+    if (seenPair.has(key)) continue;
+    seenPair.add(key);
+    strong.push({ a, b, w: br.count });
+  }
+  strong.sort((x, y) => y.w - x.w);
+  const rectOf = (i: number): GridRect => ({ x: items[i].px, y: items[i].py, w: items[i].cols, h: items[i].rows });
+  const pathClear = (a: number, b: number): boolean => {
+    const pts = pairPath(items[a], items[b]);
+    return items.every((_, j) => {
+      if (j === a || j === b) return true;
+      const r = rectOf(j);
+      for (let i = 0; i + 1 < pts.length; i++) if (segHitsRect(pts[i], pts[i + 1], r)) return false;
+      return true;
+    });
+  };
+  const splitCountFor = (i: number): number =>
+    strong.filter((p) => (p.a === i || p.b === i) && !pathClear(p.a, p.b)).length;
+  const overlapsAt = (i: number, x: number, y: number) =>
+    items.some((o, j) => j !== i && x < o.px + o.cols + GAP_PLOTS && o.px < x + items[i].cols + GAP_PLOTS
+      && y < o.py + o.rows + GAP_PLOTS && o.py < y + items[i].rows + GAP_PLOTS);
+  for (let pass = 0; pass < 2; pass++) {
+    for (const pair of strong) {
+      if (pathClear(pair.a, pair.b)) continue;
+      // Move the smaller island; ties move b.
+      const sizeA = items[pair.a].cols * items[pair.a].rows;
+      const sizeB = items[pair.b].cols * items[pair.b].rows;
+      const mover = sizeA < sizeB ? pair.a : pair.b;
+      const anchorI = mover === pair.a ? pair.b : pair.a;
+      const before = splitCountFor(mover);
+      const ox = items[mover].px;
+      const oy = items[mover].py;
+      const anchorC = { x: items[anchorI].px + items[anchorI].cols / 2, y: items[anchorI].py + items[anchorI].rows / 2 };
+      let best: { x: number; y: number; score: number } | null = null;
+      for (let r = 0; r <= 30 && !best; r += 2) {
+        for (let step = 0; step < 24; step++) {
+          const ang = (step / 24) * Math.PI * 2 + (hashSeed(items[mover].isl.id) % 628) / 100;
+          const x = Math.round(anchorC.x + Math.cos(ang) * (r + items[anchorI].cols / 2) - items[mover].cols / 2);
+          const y = Math.round(anchorC.y + Math.sin(ang) * (r + items[anchorI].rows / 2) * 0.9 - items[mover].rows / 2);
+          if (overlapsAt(mover, x, y)) continue;
+          items[mover].px = x;
+          items[mover].py = y;
+          const ok = pathClear(pair.a, pair.b) && splitCountFor(mover) < before;
+          items[mover].px = ox;
+          items[mover].py = oy;
+          if (!ok) continue;
+          const score = Math.hypot(x + items[mover].cols / 2 - anchorC.x, y + items[mover].rows / 2 - anchorC.y);
+          if (!best || score < best.score) best = { x, y, score };
+        }
+      }
+      if (best) {
+        items[mover].px = best.x;
+        items[mover].py = best.y;
+      }
+    }
+  }
+}
+
 export function relaxPlacement(
   items: { isl: { id: string }; cols: number; rows: number; px: number; py: number }[],
   bridges: { from_island: string; to_island: string; count: number }[],
@@ -296,6 +521,8 @@ export function relaxPlacement(
     it.py = best.y;
     placedIdx.push(i);
   }
+  annealPlacement(items, bridges);
+  repairBridges(items, bridges);
   const minX = Math.min(...items.map((i) => i.px));
   const minY = Math.min(...items.map((i) => i.py));
   for (const it of items) { it.px -= minX; it.py -= minY; }

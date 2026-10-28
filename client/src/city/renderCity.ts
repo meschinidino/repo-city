@@ -157,6 +157,13 @@ export class CityView {
       const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
       if (this.bridgeTexA || this.bridgeTexB) {
         if (!strong) continue;
+        // Harbour rule: a deck draws only when its whole path is
+        // open water (one water segment). A pair with an island
+        // in between gets no deck at all. Clipped stubs read as
+        // broken, duplicated bridges (owner call). Placement
+        // (annealPlacement) works to make strong pairs
+        // neighbours so this rule keeps most of them.
+        if (pair.segs.length !== 1) continue;
         // One deck height per import count, same in every
         // direction. A projected width made some decks thin.
         // Only water segments draw: no deck runs through an
@@ -619,6 +626,7 @@ export class CityView {
       let gi = 0;
       for (const pair of this.bridgePairs) {
         if (pair.count < 15) continue;
+        if (pair.segs.length !== 1) continue; // no deck, no glow (harbour rule)
         for (const points of pair.dirs) {
           gi++;
           const spr = new Sprite(this.glowTexs[0]);
