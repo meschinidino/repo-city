@@ -496,8 +496,13 @@ export class CityView {
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
           segs: waterSegments(deckPoints, (gx, gy) => landSet.has(gx + "," + gy)),
-          clear: deckPoints.every((_, i) => i + 1 >= deckPoints.length
-            || waterSegments([deckPoints[i], deckPoints[i + 1]], (gx, gy) => landSet.has(gx + "," + gy)).length === 1),
+          // A bridge is a neighbour link (owner: we were stuck
+          // patching symptoms). Deck path capped at 16 cells:
+          // on GestiKo the true neighbour bridges are 2-13 cells;
+          // the two map-crossing highways are 51 and 69.
+          clear: deckPoints.reduce((n, pt, i) => (i ? n + Math.hypot(pt.gx - deckPoints[i - 1].gx, pt.gy - deckPoints[i - 1].gy) : 0), 0) <= 16
+            && deckPoints.every((_, i) => i + 1 >= deckPoints.length
+              || waterSegments([deckPoints[i], deckPoints[i + 1]], (gx, gy) => landSet.has(gx + "," + gy)).length === 1),
           dirs: pair.dirs.map((dir) => (dir.from === br.from ? shorePoints : [...shorePoints].reverse())),
         });
       }
