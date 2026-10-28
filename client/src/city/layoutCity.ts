@@ -7,7 +7,7 @@
 import type { Extraction } from "./types";
 
 export const PLOT = 2; // cells per building plot edge
-export const GAP_PLOTS = 2; // water between islands, in plots (4 cells)
+export const GAP_PLOTS = 4; // water between islands, in plots (8 cells; owner: more space between islands)
 
 export interface CityIsland {
   id: string;

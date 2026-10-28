@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, islandShape, layoutCity, PLOT, plotDepth, repairBridges, waterSegments } from "./layoutCity";
+import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, GAP_PLOTS, islandShape, layoutCity, PLOT, plotDepth, repairBridges, waterSegments } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -195,7 +195,7 @@ describe("repairBridges (owner: move the island, not the bridge)", () => {
     for (let i = 0; i < items.length; i++)
       for (let j = i + 1; j < items.length; j++) {
         const A = items[i], B = items[j];
-        const overlap = A.px < B.px + B.cols + 2 && B.px < A.px + A.cols + 2 && A.py < B.py + B.rows + 2 && B.py < A.py + A.rows + 2;
+        const overlap = A.px < B.px + B.cols + GAP_PLOTS && B.px < A.px + A.cols + GAP_PLOTS && A.py < B.py + B.rows + GAP_PLOTS && B.py < A.py + A.rows + GAP_PLOTS;
         expect(overlap).toBe(false);
       }
   });
