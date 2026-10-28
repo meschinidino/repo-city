@@ -439,27 +439,49 @@ export class CityView {
           const legs = this.spanLegs(bent);
           points = legs.length === 2 ? [legs[0][0], legs[0][1], legs[1][1]] : [bent[0], bent[1]];
         }
-        // Decks run 1.1 cells past the shore points, into the
-        // islands. Spans end at the island rectangle, but the
-        // organic shore sits inside it: an exact end floats in
-        // open water (owner screenshot). Land tiles draw over
-        // the buried ends. The glow keeps the shore points, so
-        // it never runs on grass.
+        // True shore points: walk each end toward its island
+        // until it hits a real land cell, then step 0.25 cells
+        // back into the water. Rectangle ends made decks float
+        // in open water or run under the grass (owner calls).
+        // Decks bury 0.3 cells past the shore; the glow keeps
+        // the shore points, so it never runs on grass.
+        const shoreEnd = (
+          p: { gx: number; gy: number },
+          other: { gx: number; gy: number },
+          cells: Set<string>,
+        ) => {
+          const dx = p.gx - other.gx;
+          const dy = p.gy - other.gy;
+          const l = Math.hypot(dx, dy) || 1;
+          const ux = dx / l;
+          const uy = dy / l;
+          for (let s = -2; s <= 3; s += 0.1) {
+            const gx = p.gx + ux * s;
+            const gy = p.gy + uy * s;
+            if (cells.has(Math.floor(gx) + "," + Math.floor(gy))) {
+              return { gx: gx - ux * 0.25, gy: gy - uy * 0.25 };
+            }
+          }
+          return p;
+        };
+        const shorePoints = [...points];
+        shorePoints[0] = shoreEnd(points[0], points[1], a.cells);
+        shorePoints[shorePoints.length - 1] = shoreEnd(points[points.length - 1], points[points.length - 2], b.cells);
         const out = (p: { gx: number; gy: number }, q: { gx: number; gy: number }) => {
           const dx = p.gx - q.gx;
           const dy = p.gy - q.gy;
           const l = Math.hypot(dx, dy) || 1;
-          return { gx: p.gx + (dx / l) * 1.1, gy: p.gy + (dy / l) * 1.1 };
+          return { gx: p.gx + (dx / l) * 0.3, gy: p.gy + (dy / l) * 0.3 };
         };
-        const deckPoints = points.length === 2
-          ? [out(points[0], points[1]), out(points[1], points[0])]
-          : [out(points[0], points[1]), points[1], out(points[2], points[1])];
+        const deckPoints = shorePoints.length === 2
+          ? [out(shorePoints[0], shorePoints[1]), out(shorePoints[1], shorePoints[0])]
+          : [out(shorePoints[0], shorePoints[1]), shorePoints[1], out(shorePoints[2], shorePoints[1])];
         this.bridgePairs.push({
           count: pair.count,
           span,
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
-          dirs: pair.dirs.map((dir) => (dir.from === br.from ? points : [...points].reverse())),
+          dirs: pair.dirs.map((dir) => (dir.from === br.from ? shorePoints : [...shorePoints].reverse())),
         });
       }
     }
