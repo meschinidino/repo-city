@@ -155,12 +155,13 @@ export class CityView {
       const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
       if (this.bridgeTexA || this.bridgeTexB) {
         if (!strong) continue;
-        const [c0, c3] = [pair.deck.corners[0], pair.deck.corners[3]].map((c) => proj.project(c.gx, c.gy));
-        const deckW = Math.max(14, Math.hypot(c3[0] - c0[0], c3[1] - c0[1]));
+        // One deck height per import count, same in every
+        // direction. A projected width made some decks thin.
+        const targetH = Math.min(62, 44 + 3 * Math.log2(pair.count + 1));
         for (let i = 0; i + 1 < pair.points.length; i++) {
           const [px, py] = proj.project(pair.points[i].gx, pair.points[i].gy);
           const [qx, qy] = proj.project(pair.points[i + 1].gx, pair.points[i + 1].gy);
-          this.addDeck(px, py, qx, qy, deckW * 2.6, 1);
+          this.addDeck(px, py, qx, qy, targetH, 1);
         }
       } else if (strong) {
         const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
@@ -438,11 +439,26 @@ export class CityView {
           const legs = this.spanLegs(bent);
           points = legs.length === 2 ? [legs[0][0], legs[0][1], legs[1][1]] : [bent[0], bent[1]];
         }
+        // Decks run 1.1 cells past the shore points, into the
+        // islands. Spans end at the island rectangle, but the
+        // organic shore sits inside it: an exact end floats in
+        // open water (owner screenshot). Land tiles draw over
+        // the buried ends. The glow keeps the shore points, so
+        // it never runs on grass.
+        const out = (p: { gx: number; gy: number }, q: { gx: number; gy: number }) => {
+          const dx = p.gx - q.gx;
+          const dy = p.gy - q.gy;
+          const l = Math.hypot(dx, dy) || 1;
+          return { gx: p.gx + (dx / l) * 1.1, gy: p.gy + (dy / l) * 1.1 };
+        };
+        const deckPoints = points.length === 2
+          ? [out(points[0], points[1]), out(points[1], points[0])]
+          : [out(points[0], points[1]), points[1], out(points[2], points[1])];
         this.bridgePairs.push({
           count: pair.count,
           span,
           deck: cityBridgeDeck(span, pair.count),
-          points,
+          points: deckPoints,
           dirs: pair.dirs.map((dir) => (dir.from === br.from ? points : [...points].reverse())),
         });
       }
