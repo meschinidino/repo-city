@@ -9,10 +9,13 @@ import type { StoredEvent } from "../events/types";
 export interface SessionInfo {
   id: string;
   repo_path: string;
+  worktree_path: string | null;
   island_id: string | null;
   task: string | null;
   state: string;
   cli_session_id: string | null;
+  created_ms: number;
+  updated_ms: number;
 }
 
 export interface DiffReportView {
@@ -115,6 +118,31 @@ export async function createSession(
       spawn: opts.spawn ?? false,
       island_id: opts.islandId,
     }),
+  });
+  return (await jsonOrThrow(res)) as SessionInfo;
+}
+
+/** All sessions on the server; the caller filters by repo. */
+export async function fetchSessions(server: string): Promise<SessionInfo[]> {
+  assertHttpServer(server);
+  const res = await fetched(`${server}/api/sessions`);
+  return (await jsonOrThrow(res)) as SessionInfo[];
+}
+
+export type SessionAction = "pause" | "resume" | "stop" | "archive" | "follow-up";
+
+/** One lifecycle move on the T5 routes. Returns the session as the
+ * server now holds it. A refusal (409/404) throws LiveError. */
+export async function sessionAction(
+  server: string,
+  sessionId: string,
+  action: SessionAction,
+  task?: string,
+): Promise<SessionInfo> {
+  const res = await fetched(`${server}/api/sessions/${sessionId}/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-repo-city": "1" },
+    body: action === "follow-up" ? JSON.stringify({ task: task ?? "" }) : undefined,
   });
   return (await jsonOrThrow(res)) as SessionInfo;
 }

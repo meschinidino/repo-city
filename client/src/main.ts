@@ -7,6 +7,8 @@ import { layoutCity } from "./city/layoutCity";
 import { CityView } from "./city/renderCity";
 import { connectEvents, createSession, fetchExtraction, fetchReport, loadFailureText, stopSession, type SessionInfo } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
+import { HarborBar } from "./city/bar";
+import type { SessionInfo as BarSession } from "./city/live";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
 import coastUrl from "../../assets/sprites/coast.png";
@@ -48,6 +50,14 @@ async function loadWorld(status: HTMLElement) {
 async function mapMain(status: HTMLElement) {
   const world = await loadWorld(status);
   if (!world) return;
+  document.getElementById("new-quest")!.style.display = "none";
+  const opener = document.getElementById("repo-opener")! as HTMLFormElement;
+  opener.style.display = "flex";
+  opener.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const path = (document.getElementById("repo-path") as HTMLInputElement).value.trim();
+    if (path) location.search = `?repo=${encodeURIComponent(path)}`;
+  });
   const params = new URLSearchParams(location.search);
   const TW = params.get("full") ? 200 : Math.min(140, (innerWidth * Math.min(2, devicePixelRatio || 1)) / 21);
   const app = await renderWorld(world, TW);
@@ -95,6 +105,37 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     status.classList.add("fail");
     return;
   }
+  // Harbor bar (T12): tokens for every session of this repo, the
+  // quest log, and the report card. The event flow below still
+  // follows this primary session.
+  const bar = new HarborBar({
+    server,
+    repo,
+    islands: layout.islands.map((i) => ({ id: i.id, name: i.name })),
+    onShowReport: (s) => void showReport(s),
+    onTargetPicked: (id) => city.selectIsland(id),
+    onSessionsChanged: () => {},
+  });
+  city.onCanvasClick = (sx, sy) => {
+    const id = city.islandAtScreen(sx, sy);
+    if (id) {
+      city.selectIsland(id);
+      bar.setTargetIsland(id);
+    }
+  };
+  void bar.refresh();
+  // Tokens follow every session, not only the primary one: poll
+  // the list, and re-anchor an open report card as the camera moves.
+  setInterval(() => void bar.refresh(), 5000);
+  setInterval(() => {
+    const el = document.getElementById("report")!;
+    if (el.style.display === "block") placeReportCard(reportIsland);
+  }, 750);
+  window.addEventListener("resize", () => {
+    const el = document.getElementById("report")!;
+    if (el.style.display === "block") placeReportCard(reportIsland);
+  });
+
   // No island is chosen at creation (quest targeting is T12), so the
   // ship has no home: it stays off-screen until a real event places
   // it. Drawing it at the biggest island would invent a location.
@@ -115,16 +156,67 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   };
   refresh();
 
-  const showReport = async () => {
+  // Report card beside its island (D-report-place), clamped to
+  // the viewport, with a leader line to the island. Without an
+  // island it docks to the right edge. Step 4 shows the report
+  // plus one honest line; actions arrive in step 5 (D-card-actions).
+  const placeReportCard = (islandId: string | null) => {
     const el = document.getElementById("report")!;
+    const line = document.getElementById("report-line")!;
     el.style.display = "block";
+    const w = Math.min(380, window.innerWidth - 24);
+    const anchor = islandId ? city.islandScreenPos(islandId) : null;
+    if (!anchor) {
+      el.style.left = `${Math.max(8, window.innerWidth - w - 12)}px`;
+      el.style.top = "12px";
+      line.style.display = "none";
+      const close0 = document.getElementById("report-close")!;
+      close0.style.display = "block";
+      close0.style.left = `${Math.max(8, window.innerWidth - w - 12) + w - 76}px`;
+      close0.style.top = "20px";
+      return;
+    }
+    const left = Math.min(Math.max(8, anchor[0] - w / 2), Math.max(8, window.innerWidth - w - 8));
+    const top = Math.max(8, Math.min(anchor[1] + 16, window.innerHeight - 300));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    const cx = left + w / 2;
+    const dx = cx - anchor[0];
+    const dy = top - anchor[1];
+    line.style.display = "block";
+    line.style.left = `${anchor[0]}px`;
+    line.style.top = `${anchor[1]}px`;
+    line.style.width = `${Math.hypot(dx, dy)}px`;
+    line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    const close = document.getElementById("report-close")!;
+    close.style.display = "block";
+    close.style.left = `${left + w - 76}px`;
+    close.style.top = `${top + 8}px`;
+  };
+  document.getElementById("report-close")!.addEventListener("click", () => {
+    document.getElementById("report")!.style.display = "none";
+    document.getElementById("report-line")!.style.display = "none";
+    document.getElementById("report-close")!.style.display = "none";
+  });
+
+  let reportSeq = 0;
+  let reportIsland: string | null = null;
+  const showReport = async (forSession: BarSession = session) => {
+    const seq = ++reportSeq;
+    reportIsland = forSession.island_id;
+    const el = document.getElementById("report")!;
+    el.textContent = "Loading the report…";
+    placeReportCard(reportIsland);
     try {
-      const report = await fetchReport(server, session.id);
-      exposed.report = report;
-      el.textContent = report.available
+      const report = await fetchReport(server, forSession.id);
+      if (seq !== reportSeq) return; // a newer report owns the card
+      if (forSession.id === session.id) exposed.report = report;
+      el.textContent = (report.available
         ? `Report (${report.generated_by})\n${report.summary}`
-        : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`;
+        : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`)
+        + "\n\nFinish flow arrives in step 5.";
     } catch (e) {
+      if (seq !== reportSeq) return;
       el.textContent = `Report unavailable\nCould not fetch the report: ${(e as Error).message}. The raw events are in the server log; no report was invented.`;
       status.classList.add("fail");
       refresh(" · report fetch failed");
@@ -145,7 +237,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
         view = applyEvent(view, event, layout.fileToIsland);
         if (view !== before) {
           refresh();
-          if (event.type === "session_finished") void showReport();
+          if (event.type === "session_finished") { void showReport(); void bar.refresh(); }
         }
       },
       (state) => {
@@ -176,10 +268,11 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
       await stopSession(server, session.id);
     } catch (e) {
       status.classList.add("fail");
-      refresh(` · stop failed: ${(e as Error).message} (the session may still be running)`);
+      refresh(` · stop failed: ${(e as Error).message} (this click stopped nothing)`);
       return;
     }
     await showReport();
+    void bar.refresh();
     refresh();
   });
 }

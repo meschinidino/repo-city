@@ -45,6 +45,10 @@ export class CityView {
   private glowTexs: Texture[] = [];
   private glowSprites: { spr: Sprite; points: { gx: number; gy: number }[]; cum: number[]; phase: number }[] = [];
   private landCells = new Set<string>();
+  private ring = new Graphics();
+  private ringIsland: string | null = null;
+  /** Set by the shell: a plain click (not a drag) on the canvas. */
+  onCanvasClick: ((sx: number, sy: number) => void) | null = null;
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
     count: number;
@@ -218,6 +222,49 @@ export class CityView {
     }
   }
 
+  /** Island whose land (its organic cells) holds the point, if
+   * any. Water inside the bounding rect does not pick. */
+  islandAtScreen(sx: number, sy: number): string | null {
+    const wx = (sx - this.cam.x) / this.cam.scale;
+    const wy = (sy - this.cam.y) / this.cam.scale;
+    // Invert the projection: project(0,0) is the origin, and one
+    // grid step is (TW/2, TW/4) per axis.
+    const [ox, oy] = this.proj.project(0, 0);
+    const u = (wx - ox) / (this.proj.TW / 2);
+    const v = (wy - oy) / (this.proj.TW / 4);
+    const gx = Math.floor((u + v) / 2);
+    const gy = Math.floor((v - u) / 2);
+    for (const isl of this.layout.islands) {
+      if (isl.cells.has(gx + "," + gy)) return isl.id;
+    }
+    return null;
+  }
+
+  /** Screen position below an island's centre (report-card anchor). */
+  islandScreenPos(id: string): [number, number] | null {
+    const isl = this.layout.islands.find((i) => i.id === id);
+    if (!isl) return null;
+    const [wx, wy] = this.proj.project(isl.center.gx, isl.y + isl.rows * PLOT + 1.2);
+    return this.toScreen(wx, wy);
+  }
+
+  /** Lane-gold selection ring around an island (D-create). */
+  selectIsland(id: string | null): void {
+    this.ringIsland = id;
+    this.ring.clear();
+    if (!id) return;
+    const isl = this.layout.islands.find((i) => i.id === id);
+    if (!isl) return;
+    const pts = [
+      this.proj.project(isl.x - 1.4, isl.y - 1.4),
+      this.proj.project(isl.x + isl.cols * PLOT + 1.4, isl.y - 1.4),
+      this.proj.project(isl.x + isl.cols * PLOT + 1.4, isl.y + isl.rows * PLOT + 1.4),
+      this.proj.project(isl.x - 1.4, isl.y + isl.rows * PLOT + 1.4),
+    ];
+    this.ring.poly(pts.flat());
+    this.ring.stroke({ color: 0xffe3a3, width: 3.5, alpha: 0.95 });
+  }
+
   private fitCamera(): void {
     const w = this.app.screen.width;
     const h = this.app.screen.height;
@@ -291,7 +338,13 @@ export class CityView {
       this.clampPan();
       this.applyCam();
     });
-    el.addEventListener("pointerup", () => (drag = null));
+    el.addEventListener("pointerup", (e) => {
+      if (drag && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5 && this.onCanvasClick) {
+        const rect = el.getBoundingClientRect();
+        this.onCanvasClick(e.clientX - rect.left, e.clientY - rect.top);
+      }
+      drag = null;
+    });
     el.addEventListener("pointercancel", () => (drag = null));
     el.addEventListener("dblclick", () => {
       userMoved = false;
@@ -665,6 +718,7 @@ export class CityView {
     this.construction.height = TW * 1.4;
     root.addChild(this.construction);
 
+    root.addChild(this.ring);
     root.addChild(this.glow);
 
     // the session ship

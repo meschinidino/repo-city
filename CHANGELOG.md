@@ -4,6 +4,15 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ## [Unreleased]
 
+### Added — T12 Harbor bar (step 4, on `feat/t12-harbor-bar`, not merged)
+- Bottom command bar (approved variant A): one token per session of the open repo, newest and active first, in one scroll row; New quest opens the quest log above the bar.
+- Quest log: create a quest in plain English with a target island (click the map for a lane-gold ring, or use the list) and an agent choice (Claude agent in its worktree, or watch-only). Pause, resume, stop, archive, and follow-up run on the T5 routes; server refusals show in words.
+- The 3-quest cap now follows the server's rule exactly (working sessions with a worktree, all repos): the form disables only for agent quests and names the quests filling the cap. Island locks are the server's, and its refusal is shown as-is.
+- Report card beside its island with a leader line, viewport-clamped, with a Close button and the honest line "Finish flow arrives in step 5".
+- CSS variables from the DESIGN.md tokens for all floating surfaces; compact tokens and a full-width quest log sheet under 720px.
+- Cross reviews (Codex, Claude Opus) fixed: tokens follow all sessions (5s poll), follow-up only with a CLI session, no invented "report ready" state, report-card races and stale anchors, HTML injection via island names, cap-note naming other repos' islands.
+- Tests: Vitest 78, Playwright 4 (new harbor journey; day-3 journey unchanged).
+
 ### Changed — docs sync (2026-10-27)
 - Fixed dead doc claims found in a doc audit: README no longer says "no application code yet" (it says step 4 of 8, version 0.2.0); AGENTS.md lists the real test commands; ROADMAP marks step 3 done and step 4 in progress with T5 done; DESIGN.md, `specs/design.md` and `specs/test-plan.md` record the approved command-bar variant A; `specs/step4-plan.md` status matches its decisions; working notes carry a dated update for the 60-island counts. Released changelog entries were not touched.
 - Note for the canonical copies: `specs/design.md` and `specs/test-plan.md` were edited in the repo. Their canonical copies in `~/.gstack/projects/meta-hackathon/` need the same edits.
