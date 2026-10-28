@@ -41,7 +41,7 @@ export class CityView {
   private bridgeTex: Texture | null = null;
   private glowLayer = new Container();
   private glowTexs: Texture[] = [];
-  private glowSprites: { spr: Sprite; span: [{ gx: number; gy: number }, { gx: number; gy: number }]; phase: number }[] = [];
+  private glowSprites: { spr: Sprite; legs: [{ gx: number; gy: number }, { gx: number; gy: number }][]; split: number; phase: number }[] = [];
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
     count: number;
@@ -96,14 +96,46 @@ export class CityView {
     }
   }
 
+  /** Screen legs for a span, in grid points. Straight when the
+   * span already runs near a map axis. Else two legs along the two
+   * map axes (elbow in grid space). No leg is ever steep on
+   * screen, so no deck reads as falling. */
+  private spanLegs(span: [{ gx: number; gy: number }, { gx: number; gy: number }]): [{ gx: number; gy: number }, { gx: number; gy: number }][] {
+    const [a, b] = span;
+    const ax = Math.abs(b.gx - a.gx);
+    const ay = Math.abs(b.gy - a.gy);
+    if (Math.min(ax, ay) <= Math.max(ax, ay) * 0.35) return [[a, b]];
+    const elbow = ax >= ay ? { gx: b.gx, gy: a.gy } : { gx: a.gx, gy: b.gy };
+    return [[a, elbow], [elbow, b]];
+  }
+
+  /** One bridge deck between two screen points, from the tile
+   * (assets/sprites/bridge.png). The turn is kept within half a
+   * circle of flat, so the rails always stand up: a deck that
+   * points left is drawn flipped, never upside down. */
+  private addDeck(ax: number, ay: number, bx: number, by: number, targetH: number, alpha: number): void {
+    const tex = this.bridgeTex!;
+    const len = Math.hypot(bx - ax, by - ay);
+    if (len < 4) return;
+    let rot = Math.atan2(by - ay, bx - ax);
+    if (rot > Math.PI / 2) rot -= Math.PI;
+    else if (rot < -Math.PI / 2) rot += Math.PI;
+    const ts = new TilingSprite({ texture: tex, width: len * 1.04, height: targetH });
+    ts.anchor.set(0.5);
+    ts.position.set((ax + bx) / 2, (ay + by) / 2);
+    ts.rotation = rot;
+    const s = targetH / tex.height;
+    ts.tileScale.set(s, s);
+    ts.alpha = alpha;
+    this.bridgeSprites.addChild(ts);
+  }
+
   /** Bridges by zoom level (D-zoom): at map zoom only strong pairs
    * (15+ imports, pinned from the GestiKo distribution: 24 of 381
-   * pairs, 41% of imports) draw. At island zoom every pair draws.
-   * Strong pairs use the bridge tile (assets/sprites/bridge.png,
-   * owner pick run 1, levelled and cut to one post-to-post unit):
-   * one TilingSprite per span, turned to the span angle, so the
-   * deck is one aligned piece with no segment steps. Weak pairs
-   * keep slim lines. Fallback with no texture: deck polygon. */
+   * pairs, 41% of imports) draw, at both zooms. Weak pairs draw
+   * nothing: as lines they read as brown lines that are not
+   * bridges, and as decks they make a carpet (both owner calls).
+   * Fallback with no texture: the old deck polygon / stroke. */
   private drawBridges(): void {
     const g = this.bridgeGfx;
     const proj = this.proj;
@@ -114,19 +146,15 @@ export class CityView {
       if (this.zoomLevel === "map" && !strong) continue;
       const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
       const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
-      if (this.bridgeTex && strong) {
-        const tex = this.bridgeTex;
-        const len = Math.hypot(bx - ax, by - ay);
+      if (this.bridgeTex) {
+        if (!strong) continue;
         const [c0, c3] = [pair.deck.corners[0], pair.deck.corners[3]].map((c) => proj.project(c.gx, c.gy));
         const deckW = Math.max(14, Math.hypot(c3[0] - c0[0], c3[1] - c0[1]));
-        const targetH = deckW * 2.6;
-        const ts = new TilingSprite({ texture: tex, width: len * 1.06, height: targetH });
-        ts.anchor.set(0.5);
-        ts.position.set((ax + bx) / 2, (ay + by) / 2);
-        ts.rotation = Math.atan2(by - ay, bx - ax);
-        const s = targetH / tex.height;
-        ts.tileScale.set(s, s);
-        this.bridgeSprites.addChild(ts);
+        for (const [p, q] of this.spanLegs(pair.span)) {
+          const [px, py] = proj.project(p.gx, p.gy);
+          const [qx, qy] = proj.project(q.gx, q.gy);
+          this.addDeck(px, py, qx, qy, deckW * 2.6, 1);
+        }
       } else if (strong) {
         const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
         g.poly(corners);
@@ -156,9 +184,12 @@ export class CityView {
     const frame = Math.floor(nowMs / 160) % 3;
     for (const glow of this.glowSprites) {
       const t = ((nowMs / 4500) + glow.phase) % 1;
+      // Follow the deck path: first leg, then the second leg.
+      const leg = t < glow.split ? glow.legs[0] : glow.legs[glow.legs.length - 1];
+      const lt = t < glow.split ? t / glow.split : (t - glow.split) / (1 - glow.split);
       const [px, py] = this.proj.project(
-        glow.span[0].gx + (glow.span[1].gx - glow.span[0].gx) * t,
-        glow.span[0].gy + (glow.span[1].gy - glow.span[0].gy) * t,
+        leg[0].gx + (leg[1].gx - leg[0].gx) * lt,
+        leg[0].gy + (leg[1].gy - leg[0].gy) * lt,
       );
       glow.spr.position.set(px, py);
       glow.spr.texture = this.glowTexs[(frame + Math.floor(glow.phase * 7)) % 3];
@@ -528,7 +559,17 @@ export class CityView {
           spr.width = TW * 1.15;
           spr.height = TW * 0.67;
           spr.blendMode = "add";
-          this.glowSprites.push({ spr, span, phase: (gi * 0.37) % 1 });
+          const legs = this.spanLegs(span);
+          let split = 1;
+          if (legs.length === 2) {
+            const lens = legs.map(([p, q]) => {
+              const [px, py] = proj.project(p.gx, p.gy);
+              const [qx, qy] = proj.project(q.gx, q.gy);
+              return Math.hypot(qx - px, qy - py);
+            });
+            split = lens[0] / (lens[0] + lens[1]);
+          }
+          this.glowSprites.push({ spr, legs, split, phase: (gi * 0.37) % 1 });
           this.glowLayer.addChild(spr);
         }
       }
