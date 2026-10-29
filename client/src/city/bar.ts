@@ -31,6 +31,14 @@ export function countsTowardCap(s: SessionInfo): boolean {
   return s.state === "working" && s.worktree_path !== null;
 }
 
+/** Token label: the task first (at-a-glance ID, no hover
+ * needed), then the island and the state. Long tasks truncate
+ * in CSS; the full task stays in the tooltip. */
+export function tokenLabel(task: string | null, island: string, state: string, stall: string | null): string {
+  const what = task?.trim() ? task.trim() : "untitled";
+  return `${what} · ${island} · ${stateText(state)}${stall ? ` · ${stall}` : ""}`;
+}
+
 /** Plain words for a server state; unknown states pass through. */
 export function stateText(state: string): string {
   switch (state) {
@@ -292,7 +300,7 @@ export class HarborBar {
       // A stalled quest names its silence on the token, with
       // a pulsing amber dot instead of the working one.
       const stall = stallText(s, Date.now());
-      label.textContent = `${this.islandName(s.island_id)} · ${stateText(s.state)}${stall ? ` · ${stall}` : ""}`;
+      label.textContent = tokenLabel(s.task, this.islandName(s.island_id), s.state, stall);
       const dot = document.createElement("span");
       dot.className = stall ? "dot dot-stalled" : `dot dot-${s.state}`;
       b.append(sail, label, dot);

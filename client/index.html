@@ -56,6 +56,7 @@
       .token:hover { transform: translateY(-2px); }
       .token.selected { border-color: var(--accent); background: linear-gradient(180deg, #2e4a42, #213a35); }
       .token .ship { width: 27px; height: 27px; object-fit: contain; flex: none; }
+      .token-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .token:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       .dot { width: 9px; height: 9px; border-radius: var(--radius-full); background: var(--text-muted); flex: none; }
       .dot-working { background: var(--primary); animation: pulse 1.6s ease-in-out infinite; }
