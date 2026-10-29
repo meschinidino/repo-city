@@ -9,7 +9,7 @@ import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, CORNER_ANCHOR, CORNER_TILE_H, cornerPlacement, cornerTargetH, hashSeed, PLOT, plotDepth, waterSegments, type CityLayout } from "./layoutCity";
+import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, CORNER_ANCHOR, CORNER_TILE_H, cornerDecision, cornerTargetH, hashSeed, PLOT, plotDepth, waterSegments, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -579,33 +579,24 @@ export class CityView {
           ? [out(shorePoints[0], shorePoints[1]), out(shorePoints[1], shorePoints[0])]
           : [out(shorePoints[0], shorePoints[1]), shorePoints[1], out(shorePoints[2], shorePoints[1])];
         // Sharp bent joints turn on the corner piece: the legs shorten
-        // so their ragged tiling cuts hide under its arms. Wide joints
-        // and short legs keep full straight tiles (cornerPlacement
-        // says null), as do pairs without the sprite art.
+        // so their ragged tiling cuts hide under its arms. Wide joints,
+        // short legs, land in the joint disk, and missing art keep full
+        // straight tiles (cornerDecision returns no corner).
         const spriteMode = (this.bridgeTexA || this.bridgeTexB) && this.bridgeTexCorner;
-        const placement = spriteMode && deckPoints.length === 3
-          ? cornerPlacement(
-              deckPoints as [{ gx: number; gy: number }, { gx: number; gy: number }, { gx: number; gy: number }],
-              pair.count,
-              (gx, gy) => proj.project(gx, gy),
-              64,
-            )
-          : null;
-        const drawPoints = placement
-          ? [placement.ends[0], placement.ends[1], placement.ends[2], placement.ends[3]]
-          : deckPoints;
+        const decision = cornerDecision(
+          deckPoints,
+          pair.count,
+          (gx, gy) => proj.project(gx, gy),
+          TW,
+          { art: Boolean(spriteMode), isLand: cityLand },
+        );
         this.bridgePairs.push({
           count: pair.count,
           span,
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
-          segs: placement
-            ? [
-                ...waterSegments([drawPoints[0], drawPoints[1]], (gx, gy) => landSet.has(gx + "," + gy)),
-                ...waterSegments([drawPoints[2], drawPoints[3]], (gx, gy) => landSet.has(gx + "," + gy)),
-              ]
-            : waterSegments(deckPoints, (gx, gy) => landSet.has(gx + "," + gy)),
-          corner: placement ? { gx: placement.gx, gy: placement.gy, mirror: placement.mirror } : null,
+          segs: decision.legs.flatMap((leg) => waterSegments(leg, cityLand)),
+          corner: decision.corner,
           // A bridge is a neighbour link (owner: we were stuck
           // patching symptoms). Deck path capped at 16 cells:
           // on GestiKo the true neighbour bridges are 2-13 cells;

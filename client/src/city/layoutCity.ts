@@ -869,14 +869,16 @@ export function bridgeChevron(
 }
 
 /** Corner piece (bridge-corner.png): a mitered V composited from the
- * straight tiles at exactly +-atan(0.5), so its arms continue the legs
- * they join. E opening (arms to the east); the renderer mirrors it for
- * W openings. Built by /tmp/corner/surgery.mjs (kept, re-runnable):
- * see the PR for the 8 failed generations that led to surgery. */
+ * straight tiles at exactly +-atan(0.5), strips run frame-middle on
+ * the axes exactly like addDeck (anchor 0.5), so rails continue
+ * without a step at the butt joints. E opening (arms to the east);
+ * the renderer mirrors it for W openings. Built by
+ * /tmp/corner/surgery.mjs (kept, re-runnable): see the PR for the 8
+ * failed generations that led to surgery. */
 export const CORNER_TILE_H = 645; // built at straight-tile scale: height maps to targetH like the tiles
 export const CORNER_DECK_W = 266; // deck band width in art px (bridge-a rows 234-500)
 export const CORNER_ARM_LEN = 462; // vertex to arm tip along the arm axis, art px (2 tile units)
-export const CORNER_ANCHOR = { x: 0.0224, y: 0.4841 }; // vertex (outer miter point) as art fractions
+export const CORNER_ANCHOR = { x: 0.0224, y: 0.4564 }; // vertex (outer miter point) as art fractions
 export const CORNER_OVERLAP_W = 0.2; // legs end this far (deck widths) inside the arms, hiding their cuts
 export const CORNER_MIN_LEG = 0.5; // legs shorter than shorten + this (cells) keep straight tiles (no corner)
 
@@ -925,14 +927,17 @@ export interface CornerPlacement {
 }
 
 /** Corner placement for a bent 3-point deck path, or null when the
- * joint keeps straight tiles (wide turn, or a leg too short to hold
- * the arms). The legs end inside the arms so the corner art covers
- * their ragged tiling cuts. */
+ * joint keeps straight tiles: wide turn, a leg too short to hold the
+ * arms, or land anywhere in the joint disk (the straight tiles clip
+ * around land, the corner sprite cannot, so it stays away). The legs
+ * end inside the arms so the corner art covers their ragged tiling
+ * cuts. isLand takes integer cells, same contract as waterSegments. */
 export function cornerPlacement(
   points: [GridPt, GridPt, GridPt],
   count: number,
   project: (gx: number, gy: number) => [number, number],
   TW = 64,
+  isLand?: (gx: number, gy: number) => boolean,
 ): CornerPlacement | null {
   const [p0, elbow, p2] = points;
   const kind = cornerKind(p0, elbow, p2, project);
@@ -941,6 +946,19 @@ export function cornerPlacement(
   const leg1 = Math.hypot(p0.gx - elbow.gx, p0.gy - elbow.gy);
   const leg2 = Math.hypot(p2.gx - elbow.gx, p2.gy - elbow.gy);
   if (leg1 <= cells + CORNER_MIN_LEG || leg2 <= cells + CORNER_MIN_LEG) return null;
+  if (isLand) {
+    // Joint disk: arm length plus half a deck width, in cells. Any
+    // land inside vetoes the corner (conservative: the arms are thin
+    // but land beside them still reads wrong under the sprite).
+    const s = cornerTargetH(count) / CORNER_TILE_H;
+    const r = ((CORNER_ARM_LEN + CORNER_DECK_W / 2) * s) / (TW * Math.hypot(0.5, 0.25));
+    for (let dx = -r; dx <= r; dx += 0.3) {
+      for (let dy = -r; dy <= r; dy += 0.3) {
+        if (dx * dx + dy * dy > r * r) continue;
+        if (isLand(Math.floor(elbow.gx + dx), Math.floor(elbow.gy + dy))) return null;
+      }
+    }
+  }
   const toward = (from: GridPt, to: GridPt): GridPt => {
     const dx = to.gx - from.gx;
     const dy = to.gy - from.gy;
@@ -948,6 +966,46 @@ export function cornerPlacement(
     return { gx: from.gx + (dx / len) * cells, gy: from.gy + (dy / len) * cells };
   };
   return { gx: elbow.gx, gy: elbow.gy, mirror: kind.mirror, ends: [p0, toward(elbow, p0), toward(elbow, p2), p2] };
+}
+
+export interface CornerDecision {
+  legs: [GridPt, GridPt][]; // leg spans for waterSegments: full or shortened
+  corner: { gx: number; gy: number; mirror: boolean } | null;
+}
+
+/** The renderer's whole per-pair corner choice as one pure function
+ * (tested; renderCity only draws what this returns). Without the
+ * sprite art, or for straight paths, wide turns, short legs, or land
+ * in the joint: full legs, no corner. Otherwise shortened legs plus
+ * the corner record. */
+export function cornerDecision(
+  points: GridPt[],
+  count: number,
+  project: (gx: number, gy: number) => [number, number],
+  TW: number,
+  opts: { art: boolean; isLand?: (gx: number, gy: number) => boolean },
+): CornerDecision {
+  if (!opts.art || points.length !== 3) {
+    const legs: [GridPt, GridPt][] = [];
+    for (let i = 0; i + 1 < points.length; i++) legs.push([points[i], points[i + 1]]);
+    return { legs, corner: null };
+  }
+  const placement = cornerPlacement(
+    points as [GridPt, GridPt, GridPt],
+    count,
+    project,
+    TW,
+    opts.isLand,
+  );
+  if (!placement) {
+    const [p0, elbow, p2] = points;
+    return { legs: [[p0, elbow], [elbow, p2]], corner: null };
+  }
+  const [p0, e1, e2, p2] = placement.ends;
+  return {
+    legs: [[p0, e1], [e2, p2]],
+    corner: { gx: placement.gx, gy: placement.gy, mirror: placement.mirror },
+  };
 }
 
 /** Isometric projection for a city of any size (same math as the test map). */
