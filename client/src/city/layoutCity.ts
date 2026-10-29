@@ -839,6 +839,253 @@ export function cityBridgeDeck(
   };
 }
 
+/** Deck height per import count (world px). One height per count
+ * in every direction; the ribbon builder and renderer share it. */
+export function deckTargetH(count: number): number {
+  return Math.min(62, 44 + 3 * Math.log2(count + 1));
+}
+
+/** Deflections past 120° become a flat bevel facet (miter length
+ * over this, × half width). Past the limit the edge texels would
+ * smear; the facet keeps plank density. Gentler bends miter. */
+export const RIBBON_MITER_LIMIT = 2;
+
+export interface RibbonStrip {
+  positions: number[]; // x,y per vert, same space as the input points
+  uvs: number[]; // u in texture repeats along length, v across (0 left, 1 right)
+  indices: number[]; // triangles, both windings (few tris, no cull worries)
+}
+
+/**
+ * Mitered ribbon strips for a bridge deck path: the standard
+ * stroked-polyline tessellation (miter joins, bevel past the limit).
+ * One strip per leg so each leg keeps its direction texture; strips
+ * share seam verts+uvs at elbows, so plank phase continues across
+ * joints with no gap and no overlap. u accumulates per edge by
+ * arclength, so planks fan slightly at bends instead of smearing.
+ * Legs shorter than the miter offset (and exact reversals) butt at
+ * their cross-sections instead of folding. Screen space (y down):
+ * left of travel is (dy,-dx). Pure: tested, renderer-agnostic.
+ */
+export function deckRibbon(
+  points: [number, number][],
+  halfW: number,
+  periods: number[], // world px per texture repeat, one per leg
+): RibbonStrip[] {
+  if (points.length < 2 || halfW <= 0) return [];
+  const segs: [number, number, number][] = [];
+  for (let i = 0; i + 1 < points.length; i++) {
+    const dx = points[i + 1][0] - points[i][0];
+    const dy = points[i + 1][1] - points[i][1];
+    segs.push([dx, dy, Math.hypot(dx, dy)]);
+  }
+  // Leading zero-length legs take the first real direction, so no
+  // false bend opens at the path start.
+  let firstDir: [number, number] = [1, 0];
+  for (const [dx, dy, len] of segs) {
+    if (len > 1e-9) { firstDir = [dx / len, dy / len]; break; }
+  }
+  const dirs: [number, number][] = [];
+  for (const [dx, dy, len] of segs) {
+    if (len > 1e-9) dirs.push([dx / len, dy / len]);
+    else if (dirs.length) dirs.push(dirs[dirs.length - 1]);
+    else dirs.push(firstDir);
+  }
+  const leftOf = (d: [number, number]): [number, number] => [d[1], -d[0]];
+  const normals = dirs.map(leftOf);
+  const period = (i: number): number => {
+    const p = periods[Math.min(i, periods.length - 1)] ?? 1;
+    return p > 0 ? p : 1;
+  };
+  interface Vert { x: number; y: number; u: number; v: number }
+  const strips: RibbonStrip[] = [];
+  let prevL: Vert | null = null;
+  let prevR: Vert | null = null;
+  let ul = 0;
+  let ur = 0;
+  const dist = (a: Vert, x: number, y: number): number => Math.hypot(a.x - x, a.y - y);
+  for (let i = 0; i < dirs.length; i++) {
+    const P = period(i);
+    const n = normals[i];
+    const startPt = points[i];
+    // Start edge: path start, or the previous elbow (carried u).
+    const startL: Vert = prevL ?? { x: startPt[0] + n[0] * halfW, y: startPt[1] + n[1] * halfW, u: 0, v: 0 };
+    const startR: Vert = prevR ?? { x: startPt[0] - n[0] * halfW, y: startPt[1] - n[1] * halfW, u: 0, v: 1 };
+    let endL: Vert;
+    let endR: Vert;
+    let facet: Vert | null = null; // bevel-facet third vert (outer, leg i textured)
+    if (i + 1 >= dirs.length) {
+      const endPt = points[i + 1];
+      const lx = endPt[0] + n[0] * halfW;
+      const ly = endPt[1] + n[1] * halfW;
+      const rx = endPt[0] - n[0] * halfW;
+      const ry = endPt[1] - n[1] * halfW;
+      ul += dist(startL, lx, ly) / P;
+      ur += dist(startR, rx, ry) / P;
+      endL = { x: lx, y: ly, u: ul, v: 0 };
+      endR = { x: rx, y: ry, u: ur, v: 1 };
+    } else {
+      const E = points[i + 1];
+      const d1 = dirs[i];
+      const d2 = dirs[i + 1];
+      const n1 = normals[i];
+      const n2 = normals[i + 1];
+      let mx = n1[0] + n2[0];
+      let my = n1[1] + n2[1];
+      const ml = Math.hypot(mx, my);
+      if (ml < 1e-9) { mx = n1[0]; my = n1[1]; } else { mx /= ml; my /= ml; }
+      const cosHalf = Math.max(0, mx * n1[0] + my * n1[1]);
+      const miterLen = cosHalf > 1e-9 ? halfW / cosHalf : halfW;
+      const cross = d1[0] * d2[1] - d1[1] * d2[0];
+      const innerSign = cross < 0 ? 1 : -1; // left turn: inner is +m (left)
+      const ix = E[0] + mx * innerSign * miterLen;
+      const iy = E[1] + my * innerSign * miterLen;
+      const outerLeft = innerSign < 0;
+      // Butt fallback: the miter vertex sits halfW·tan(deflection/2)
+      // along each leg. Past a short leg it would fold the quad, and
+      // on an exact reversal the edges swap sides. Butt both legs at
+      // their cross-sections instead; the wedge stays tiny.
+      const tanHalf = cosHalf > 1e-9 ? Math.sqrt(Math.max(0, 1 - cosHalf * cosHalf)) / cosHalf : Infinity;
+      const shortLeg = Math.min(
+        Math.hypot(E[0] - points[i][0], E[1] - points[i][1]),
+        Math.hypot(points[i + 2][0] - E[0], points[i + 2][1] - E[1]),
+      );
+      if (ml < 1e-9 || halfW * tanHalf > shortLeg) {
+        const e1Lx = E[0] + n1[0] * halfW;
+        const e1Ly = E[1] + n1[1] * halfW;
+        const e1Rx = E[0] - n1[0] * halfW;
+        const e1Ry = E[1] - n1[1] * halfW;
+        ul += dist(startL, e1Lx, e1Ly) / P;
+        ur += dist(startR, e1Rx, e1Ry) / P;
+        endL = { x: e1Lx, y: e1Ly, u: ul, v: 0 };
+        endR = { x: e1Rx, y: e1Ry, u: ur, v: 1 };
+        prevL = { x: E[0] + n2[0] * halfW, y: E[1] + n2[1] * halfW, u: ul, v: 0 };
+        prevR = { x: E[0] - n2[0] * halfW, y: E[1] - n2[1] * halfW, u: ur, v: 1 };
+      } else if (miterLen / halfW > RIBBON_MITER_LIMIT) {
+        // Bevel: outer edge chords across (O1->O2), inner miters.
+        const os = outerLeft ? 1 : -1; // +1: outer is the left edge
+        const q1x = E[0] + n1[0] * os * halfW;
+        const q1y = E[1] + n1[1] * os * halfW;
+        const q2x = E[0] + n2[0] * os * halfW;
+        const q2y = E[1] + n2[1] * os * halfW;
+        if (outerLeft) {
+          ul += dist(startL, q1x, q1y) / P;
+          const uO2 = ul + Math.hypot(q2x - q1x, q2y - q1y) / P;
+          ur += dist(startR, ix, iy) / P;
+          endL = { x: q1x, y: q1y, u: ul, v: 0 };
+          endR = { x: ix, y: iy, u: ur, v: 1 };
+          facet = { x: q2x, y: q2y, u: uO2, v: 0 };
+          prevL = { x: q2x, y: q2y, u: uO2, v: 0 };
+          prevR = { x: ix, y: iy, u: ur, v: 1 };
+          ul = uO2;
+        } else {
+          ur += dist(startR, q1x, q1y) / P;
+          const uO2 = ur + Math.hypot(q2x - q1x, q2y - q1y) / P;
+          ul += dist(startL, ix, iy) / P;
+          endL = { x: ix, y: iy, u: ul, v: 0 };
+          endR = { x: q1x, y: q1y, u: ur, v: 1 };
+          facet = { x: q2x, y: q2y, u: uO2, v: 1 };
+          prevL = { x: ix, y: iy, u: ul, v: 0 };
+          prevR = { x: q2x, y: q2y, u: uO2, v: 1 };
+          ur = uO2;
+        }
+      } else {
+        const ox = E[0] - mx * innerSign * miterLen;
+        const oy = E[1] - my * innerSign * miterLen;
+        if (outerLeft) {
+          ul += dist(startL, ox, oy) / P;
+          ur += dist(startR, ix, iy) / P;
+          endL = { x: ox, y: oy, u: ul, v: 0 };
+          endR = { x: ix, y: iy, u: ur, v: 1 };
+        } else {
+          ul += dist(startL, ix, iy) / P;
+          ur += dist(startR, ox, oy) / P;
+          endL = { x: ix, y: iy, u: ul, v: 0 };
+          endR = { x: ox, y: oy, u: ur, v: 1 };
+        }
+        prevL = endL;
+        prevR = endR;
+      }
+    }
+    const positions = [startL.x, startL.y, startR.x, startR.y, endL.x, endL.y, endR.x, endR.y];
+    const uvs = [startL.u, startL.v, startR.u, startR.v, endL.u, endL.v, endR.u, endR.v];
+    // Quad diagonal startR->endL: both triangles cover the quad
+    // (the old 0-2 diagonal ran along the left edge and left a hole
+    // along the right rail). Both windings, no cull worries.
+    const indices = [0, 1, 2, 1, 3, 2, 2, 1, 0, 2, 3, 1];
+    if (facet) {
+      positions.push(facet.x, facet.y);
+      uvs.push(facet.u, facet.v);
+      // Facet spans the seam: (endOuter, endInner, facetOuter).
+      const outerIdx = facet.v === 0 ? 2 : 3;
+      const innerIdx = facet.v === 0 ? 3 : 2;
+      indices.push(outerIdx, innerIdx, 4, 4, innerIdx, outerIdx);
+    }
+    strips.push({ positions, uvs, indices });
+  }
+  return strips;
+}
+
+/** Rail edges from ribbon strips: the left edge (v=0) and the right
+ * edge (v=1) as polylines, following miter seams and bevel facets.
+ * Strip verts run startL, startR, endL, endR with the bevel facet
+ * (when present) as the 5th vert on the outer edge. Pure: tested,
+ * renderer-agnostic. */
+export function deckEdges(strips: RibbonStrip[]): { left: [number, number][]; right: [number, number][] } {
+  const left: [number, number][] = [];
+  const right: [number, number][] = [];
+  const push = (edge: [number, number][], x: number, y: number): void => {
+    const l = edge[edge.length - 1];
+    if (!l || Math.hypot(l[0] - x, l[1] - y) > 1e-6) edge.push([x, y]);
+  };
+  strips.forEach((s, i) => {
+    const p = s.positions;
+    if (i === 0) { push(left, p[0], p[1]); push(right, p[2], p[3]); }
+    // Bevel facet (5th vert) extends the outer edge past the seam.
+    const facetL = p.length > 8 && s.uvs[9] === 0;
+    push(left, p[4], p[5]);
+    if (facetL) push(left, p[8], p[9]);
+    push(right, p[6], p[7]);
+    if (p.length > 8 && !facetL) push(right, p[8], p[9]);
+  });
+  return { left, right };
+}
+
+/** Stations along a polyline every `spacing` world px, for bridge
+ * rail posts: both endpoints plus middles on a `phase`-shifted grid
+ * (rails stagger by half a spacing). A middle closer than half a
+ * spacing to either end drops, so posts never bunch. Pure,
+ * renderer-agnostic. */
+export function studsOnPath(points: [number, number][], spacing: number, phase = 0): [number, number][] {
+  if (points.length === 0) return [];
+  if (points.length === 1 || spacing <= 0) return [points[0]];
+  const cum = [0];
+  for (let i = 1; i < points.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  }
+  const len = cum[cum.length - 1];
+  if (len < 1e-9) return [points[0]];
+  const at = (s: number): [number, number] => {
+    const t = Math.min(len, Math.max(0, s));
+    let i = 1;
+    while (i < cum.length - 1 && cum[i] < t) i++;
+    const span = cum[i] - cum[i - 1];
+    const f = span < 1e-9 ? 0 : (t - cum[i - 1]) / span;
+    return [
+      points[i - 1][0] + (points[i][0] - points[i - 1][0]) * f,
+      points[i - 1][1] + (points[i][1] - points[i - 1][1]) * f,
+    ];
+  };
+  const out: [number, number][] = [points[0]];
+  for (let k = 0; ; k++) {
+    const t = phase + k * spacing;
+    if (t > len - spacing / 2 + 1e-9) break;
+    if (t >= spacing / 2 - 1e-9) out.push(at(t));
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
 export interface BridgeChevron {
   tip: { gx: number; gy: number };
   wingA: { gx: number; gy: number };

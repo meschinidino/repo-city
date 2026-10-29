@@ -1,6 +1,7 @@
-import { Application, Assets, Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
-import bridgeAUrl from "../../../assets/sprites/bridge-a.png";
-import bridgeBUrl from "../../../assets/sprites/bridge-b.png";
+import { Application, Assets, Container, Graphics, MeshSimple, Sprite, Text, Texture } from "pixi.js";
+import plankAUrl from "../../../assets/sprites/bridge-plank-a.png";
+import plankBUrl from "../../../assets/sprites/bridge-plank-b.png";
+import postUrl from "../../../assets/sprites/bridge-post.png";
 import glow0Url from "../../../assets/sprites/glow-0.png";
 import glow1Url from "../../../assets/sprites/glow-1.png";
 import glow2Url from "../../../assets/sprites/glow-2.png";
@@ -8,8 +9,17 @@ import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, waterSegments, type CityLayout } from "./layoutCity";
+import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, deckEdges, deckRibbon, deckTargetH, hashSeed, PLOT, plotDepth, studsOnPath, waterSegments, type CityLayout, type RibbonStrip } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
+
+/** Rail furniture: posts stamp along both deck edges every
+ * POST_SPACING world px (rails stagger by half a spacing), each
+ * POST_H_FRAC of the deck width tall; one rope sags between
+ * consecutive post tops (ROPE_FRAC up from the post base). */
+const POST_SPACING = 22;
+const POST_H_FRAC = 0.3;
+const ROPE_FRAC = 0.92;
+const ROPE_SAG = 3;
 
 const BUILDING_SPRITE: Record<string, string> = {
   keep: "keep",
@@ -39,8 +49,13 @@ export class CityView {
   private fitScale = 1;
   private bridgeGfx!: Graphics;
   private bridgeSprites = new Container();
-  private bridgeTexA: Texture | null = null;
-  private bridgeTexB: Texture | null = null;
+  private plankTexA: Texture | null = null;
+  private plankTexB: Texture | null = null;
+  private postTex: Texture | null = null;
+  private ropeGfx!: Graphics;
+  private postLayer = new Container();
+  /** Post range per drawn pair (visual QA isolates one pair). */
+  private postRanges: { start: number; count: number }[] = [];
   private glowLayer = new Container();
   private glowTexs: Texture[] = [];
   private glowSprites: { spr: Sprite; points: { gx: number; gy: number }[]; cum: number[]; phase: number }[] = [];
@@ -55,7 +70,6 @@ export class CityView {
     span: [{ gx: number; gy: number }, { gx: number; gy: number }];
     deck: ReturnType<typeof cityBridgeDeck>;
     points: { gx: number; gy: number }[];
-    segs: [{ gx: number; gy: number }, { gx: number; gy: number }][];
     clear: boolean;
     dirs: { gx: number; gy: number }[][];
   }[] = [];
@@ -119,31 +133,6 @@ export class CityView {
     return [[a, elbow], [elbow, b]];
   }
 
-  /** One bridge deck between two screen points. Two direction
-   * tiles (owner: new assets for different directions): A for
-   * legs that run up-right on screen, B for legs that run
-   * down-right, each drawn in its own perspective. The turn is
-   * kept within half a circle of flat, so the rails always stand
-   * up: a deck that points left is drawn flipped, never upside
-   * down. */
-  private addDeck(ax: number, ay: number, bx: number, by: number, targetH: number, alpha: number): void {
-    const len = Math.hypot(bx - ax, by - ay);
-    if (len < 4) return;
-    let rot = Math.atan2(by - ay, bx - ax);
-    if (rot > Math.PI / 2) rot -= Math.PI;
-    else if (rot < -Math.PI / 2) rot += Math.PI;
-    const tex = (rot < 0 ? this.bridgeTexA : this.bridgeTexB) ?? this.bridgeTexA ?? this.bridgeTexB;
-    if (!tex) return;
-    const ts = new TilingSprite({ texture: tex, width: len * 1.04, height: targetH });
-    ts.anchor.set(0.5);
-    ts.position.set((ax + bx) / 2, (ay + by) / 2);
-    ts.rotation = rot;
-    const s = targetH / tex.height;
-    ts.tileScale.set(s, s);
-    ts.alpha = alpha;
-    this.bridgeSprites.addChild(ts);
-  }
-
   /** Bridges by zoom level (D-zoom): at map zoom only strong pairs
    * (15+ imports, pinned from the GestiKo distribution: 24 of 381
    * pairs, 41% of imports) draw, at both zooms. Weak pairs draw
@@ -154,13 +143,21 @@ export class CityView {
     const g = this.bridgeGfx;
     const proj = this.proj;
     g.clear();
-    for (const child of this.bridgeSprites.removeChildren()) child.destroy();
+    for (const child of this.bridgeSprites.removeChildren()) {
+      // Mesh.destroy drops the geometry without destroying it; free
+      // the GPU buffers explicitly (every zoom change redraws).
+      if (child instanceof MeshSimple) child.geometry.destroy();
+      child.destroy();
+    }
+    this.ropeGfx.clear();
+    for (const child of this.postLayer.removeChildren()) child.destroy();
+    this.postRanges = [];
     for (const pair of this.bridgePairs) {
       const strong = pair.count >= 15;
       if (this.zoomLevel === "map" && !strong) continue;
       const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
       const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
-      if (this.bridgeTexA || this.bridgeTexB) {
+      if (this.plankTexA || this.plankTexB) {
         if (!strong) continue;
         // Harbour rule: a deck draws only when its whole path is
         // open water (one water segment). A pair with an island
@@ -169,16 +166,33 @@ export class CityView {
         // (annealPlacement) works to make strong pairs
         // neighbours so this rule keeps most of them.
         if (!pair.clear) continue;
-        // One deck height per import count, same in every
-        // direction. A projected width made some decks thin.
-        // Only water segments draw: no deck runs through an
-        // island that sits between the pair.
-        const targetH = Math.min(62, 44 + 3 * Math.log2(pair.count + 1));
-        for (const [p, q] of pair.segs) {
-          const [px, py] = proj.project(p.gx, p.gy);
-          const [qx, qy] = proj.project(q.gx, q.gy);
-          this.addDeck(px, py, qx, qy, targetH, 1);
+        // Ribbon deck: one mitered strip per leg (deckRibbon),
+        // each leg in its direction plank texture (A up-right, B
+        // down-right, same rule as the old tiles). Strips share
+        // seam verts at elbows: bends of any angle render with
+        // no gap and no overlap, plank phase continuous.
+        const targetH = deckTargetH(pair.count);
+        const pts = pair.points.map((p) => proj.project(p.gx, p.gy) as [number, number]);
+        const texs: (Texture | null)[] = [];
+        for (let i = 0; i + 1 < pts.length; i++) {
+          let rot = Math.atan2(pts[i + 1][1] - pts[i][1], pts[i + 1][0] - pts[i][0]);
+          if (rot > Math.PI / 2) rot -= Math.PI;
+          else if (rot < -Math.PI / 2) rot += Math.PI;
+          texs.push((rot < 0 ? this.plankTexA : this.plankTexB) ?? this.plankTexA ?? this.plankTexB);
         }
+        const periods = texs.map((t) => (t ? (t.width * targetH) / t.height : 1));
+        const strips = deckRibbon(pts, targetH / 2, periods);
+        for (let i = 0; i < strips.length; i++) {
+          const tex = texs[i];
+          if (!tex) continue;
+          this.bridgeSprites.addChild(new MeshSimple({
+            texture: tex,
+            vertices: new Float32Array(strips[i].positions),
+            uvs: new Float32Array(strips[i].uvs),
+            indices: new Uint32Array(strips[i].indices),
+          }));
+        }
+        this.drawRails(strips, targetH);
       } else if (strong) {
         const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
         g.poly(corners);
@@ -193,6 +207,42 @@ export class CityView {
         g.stroke({ color: 0xcfa06a, alpha: 0.5, width: 2 });
       }
     }
+  }
+
+  /** Rail furniture for a ribbon deck: posts stamp along both
+   * edges (rails stagger by half a spacing), one rope sags
+   * between consecutive post tops. Edges come from the strip
+   * verts, so rails follow miters and bevels exactly. */
+  private drawRails(strips: RibbonStrip[], targetH: number): void {
+    const post = this.postTex;
+    if (!post) return;
+    const start = this.postLayer.children.length;
+    const { left: edgeL, right: edgeR } = deckEdges(strips);
+    const postH = POST_H_FRAC * targetH;
+    const scale = postH / post.height;
+    for (const [edge, phase] of [[edgeL, 0], [edgeR, POST_SPACING / 2]] as const) {
+      const studs = studsOnPath(edge, POST_SPACING, phase);
+      for (const [x, y] of studs) {
+        const spr = new Sprite(post);
+        spr.anchor.set(0.5, 1);
+        spr.scale.set(scale, scale);
+        spr.position.set(x, y + 1);
+        this.postLayer.addChild(spr);
+      }
+      const g = this.ropeGfx;
+      studs.forEach(([x, y], k) => {
+        const wy = y + 1 - ROPE_FRAC * postH;
+        if (k === 0) g.moveTo(x, wy);
+        else {
+          const [px, py] = studs[k - 1];
+          const pwy = py + 1 - ROPE_FRAC * postH;
+          // Quadratic midpoint reaches half the control offset.
+          g.quadraticCurveTo((px + x) / 2, (pwy + wy) / 2 + ROPE_SAG * 2, x, wy);
+        }
+      });
+    }
+    this.ropeGfx.stroke({ color: 0xc9a068, width: 2, alpha: 0.95 });
+    this.postRanges.push({ start, count: this.postLayer.children.length - start });
   }
 
   /** Direction glow (owner: sprite frames, not code dots): one
@@ -559,7 +609,6 @@ export class CityView {
           span,
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
-          segs: waterSegments(deckPoints, (gx, gy) => landSet.has(gx + "," + gy)),
           // A bridge is a neighbour link (owner: we were stuck
           // patching symptoms). Deck path capped at 16 cells:
           // on GestiKo the true neighbour bridges are 2-13 cells;
@@ -571,11 +620,24 @@ export class CityView {
         });
       }
     }
-    this.bridgeTexA = (await Assets.load(bridgeAUrl).catch(() => null)) as Texture | null;
-    this.bridgeTexB = (await Assets.load(bridgeBUrl).catch(() => null)) as Texture | null;
+    this.plankTexA = (await Assets.load(plankAUrl).catch(() => null)) as Texture | null;
+    this.plankTexB = (await Assets.load(plankBUrl).catch(() => null)) as Texture | null;
+    this.postTex = (await Assets.load(postUrl).catch(() => null)) as Texture | null;
+    // Ribbon uvs repeat along the deck: sampler wrap, not clamp.
+    for (const t of [this.plankTexA, this.plankTexB]) {
+      if (t) {
+        t.source.style.addressModeU = "repeat";
+        t.source.style.update();
+      }
+    }
     this.glowTexs = ((await Promise.all([glow0Url, glow1Url, glow2Url].map((u) => Assets.load(u).catch(() => null)))).filter(Boolean) as Texture[]);
     this.bridgeGfx = new Graphics();
+    this.ropeGfx = new Graphics();
+    // Decks below ropes below posts: ropes cross the deck but
+    // tuck behind the post tops.
     root.addChild(this.bridgeSprites);
+    root.addChild(this.ropeGfx);
+    root.addChild(this.postLayer);
     root.addChild(this.bridgeGfx);
     this.drawBridges();
 
