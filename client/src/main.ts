@@ -332,8 +332,16 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     });
     const d = document.createElement("div");
     d.className = "report-line report-muted";
+    d.dataset.role = "busy";
     d.textContent = text;
     box.appendChild(d);
+  };
+  /** Drop the busy note and unlock the buttons after a refusal. */
+  const unbusy = (box: HTMLElement) => {
+    box.querySelector('[data-role="busy"]')?.remove();
+    box.querySelectorAll("button").forEach((b) => {
+      (b as HTMLButtonElement).disabled = false;
+    });
   };
 
   const confirmAccept = (box: HTMLElement, forSession: BarSession, preview: AcceptPreview) => {
@@ -371,9 +379,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
       const err = box.querySelector('[data-role="err"]')!;
       err.textContent = message;
       (err as HTMLElement).style.display = "block";
-      box.querySelectorAll("button").forEach((b) => {
-        (b as HTMLButtonElement).disabled = false;
-      });
+      unbusy(box);
       // The conflict path (design): the card keys off the
       // server's conflict wording; any other refusal shows as
       // text with a way back. If the wording ever changes, the
@@ -417,9 +423,7 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
         err.textContent = (e as Error).message;
         err.style.display = "block";
       }
-      box.querySelectorAll("button").forEach((b) => {
-        (b as HTMLButtonElement).disabled = false;
-      });
+      unbusy(box);
     }
   };
 

@@ -105,6 +105,8 @@ test("finish journey: keep, accept refusal, discard from the card", async ({ pag
   await expect(card).toContainText("Accept this quest?");
   await card.getByRole("button", { name: "Merge and run checks" }).click();
   await expect(card.locator(".report-err")).toContainText("no worktree");
+  // ISSUE-QA3: the "Merging…" note used to stay beside the refusal.
+  await expect(card).not.toContainText("Merging…");
   await card.getByRole("button", { name: "Back" }).click();
   await expect(card).toContainText("Merge into:");
   await card.getByRole("button", { name: "Discard" }).click();
