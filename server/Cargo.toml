@@ -20,6 +20,7 @@ path = "src/bin/repo-city-server.rs"
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
+libc = "0.2"
 notify = "8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }
@@ -39,3 +40,4 @@ serde_json = { version = "1", features = ["preserve_order"] }
 reqwest = { version = "0.12", features = ["json"] }
 tempfile = "3"
 tokio-tungstenite = "0.26"
+libc = "0.2"

@@ -13,6 +13,12 @@ export interface SessionInfo {
   island_id: string | null;
   task: string | null;
   state: string;
+  /** Merge target recorded at creation (T6); null for
+   * watcher-only quests and pre-step-5 rows. */
+  base_branch: string | null;
+  /** Newest event time, for the stalled marker; null when the
+   * log holds nothing. */
+  last_event_ms: number | null;
   model: string | null;
   effort: string | null;
   agent: string | null;
@@ -20,6 +26,32 @@ export interface SessionInfo {
   cli_session_id: string | null;
   created_ms: number;
   updated_ms: number;
+}
+
+/** Read-only Accept preview (T6): everything the card shows
+ * before the user confirms. The POST re-checks it all. */
+export interface AcceptPreview {
+  session: SessionInfo;
+  state_ok: boolean;
+  worktree_exists: boolean;
+  base_branch: string | null;
+  current_branch: string | null;
+  on_target: boolean;
+  dirty_files: string[];
+  merge_in_progress: boolean;
+  test: { command: string; source: string; dir: string } | null;
+}
+
+/** POST /accept answer: the session plus what happened. */
+export interface AcceptResult {
+  session: SessionInfo;
+  merge_sha: string;
+  test_command: string | null;
+  test_source: string | null;
+  test_passed: boolean | null;
+  test_output: string;
+  /** Set when the merge landed but the worktree cleanup failed. */
+  cleanup_warning: string | null;
 }
 
 export interface DiffReportView {
@@ -136,7 +168,7 @@ export async function fetchSessions(server: string): Promise<SessionInfo[]> {
   return (await jsonOrThrow(res)) as SessionInfo[];
 }
 
-export type SessionAction = "pause" | "resume" | "stop" | "archive" | "follow-up";
+export type SessionAction = "pause" | "resume" | "stop" | "archive" | "follow-up" | "discard" | "keep";
 
 /** All stored events for one session, in order. */
 export async function fetchSessionEvents(server: string, sessionId: string): Promise<StoredEvent[]> {
@@ -183,6 +215,22 @@ export async function stopSession(server: string, sessionId: string): Promise<vo
 export async function fetchReport(server: string, sessionId: string): Promise<DiffReportView> {
   const res = await fetched(`${server}/api/sessions/${sessionId}/report`);
   return (await jsonOrThrow(res)) as DiffReportView;
+}
+
+export async function fetchAcceptPreview(server: string, sessionId: string): Promise<AcceptPreview> {
+  assertHttpServer(server);
+  const res = await fetched(`${server}/api/sessions/${sessionId}/accept-preview`);
+  return (await jsonOrThrow(res)) as AcceptPreview;
+}
+
+/** Accept a quest: merge, checks, cleanup. Returns what
+ * happened; a guard refusal throws LiveError with the reason. */
+export async function acceptSession(server: string, sessionId: string): Promise<AcceptResult> {
+  const res = await fetched(`${server}/api/sessions/${sessionId}/accept`, {
+    method: "POST",
+    headers: { "x-repo-city": "1" },
+  });
+  return (await jsonOrThrow(res)) as AcceptResult;
 }
 
 /** Connect to the event stream; replay starts at `sinceId` (0 = all). */

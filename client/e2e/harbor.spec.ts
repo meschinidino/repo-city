@@ -82,6 +82,12 @@ test("harbor bar journey: tokens, create, cap, pause, archive", async ({ page })
   }
   await expect(page.locator("#tokens .token")).toHaveCount(3);
 
+  // Hovering a token shows an instant card with the full task.
+  await page.locator("#tokens .token", { hasText: "Fix the sample quest" }).hover();
+  await expect(page.locator("#hovercard")).toBeVisible();
+  await expect(page.locator("#hovercard .hover-title")).toHaveText("Fix the sample quest");
+  await expect(page.locator("#hovercard .hover-meta")).toContainText("working");
+
   // The map follows the quest just created: its ship docks at
   // that quest's island before any file event exists.
   const docked = await page.evaluate((island) => {

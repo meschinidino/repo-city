@@ -33,6 +33,14 @@ pub struct AppState {
     /// events out of global-id order (a live client drops any event
     /// whose id is below the last one it saw).
     emit_lock: Arc<Mutex<()>>,
+    /// One async mutex per session id, held by every mutating
+    /// route for its whole duration and by the completion-path
+    /// follow-up auto-start. Accept's merge+checks window can run
+    /// minutes; without this a second Accept, a Discard, or a
+    /// follow-up could interleave it and strand or lose the work.
+    /// Entries are never removed (one small Arc per id); holders
+    /// take exactly one and never nest, so it cannot deadlock.
+    session_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     debounce: Duration,
 }
 
@@ -63,6 +71,17 @@ impl AppState {
         let event = self.store.append(session_id, source, payload)?;
         let _ = self.tx.send(event.clone());
         Ok(event)
+    }
+
+    /// The mutex serializing mutations of one session. Held
+    /// across the whole route body (see `session_locks`).
+    fn session_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.session_locks
+            .lock()
+            .unwrap()
+            .entry(session_id.to_string())
+            .or_default()
+            .clone()
     }
 
     /// Stop the watcher and kill the agent child of one session.
@@ -223,6 +242,7 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         children: Mutex::new(HashMap::new()),
         spawning: Mutex::new(std::collections::HashSet::new()),
         emit_lock: Arc::new(Mutex::new(())),
+        session_locks: Mutex::new(HashMap::new()),
         debounce,
     });
     Router::new()
@@ -241,6 +261,10 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/archive", post(archive_session))
         .route("/api/sessions/{id}/follow-up", post(follow_up_session))
         .route("/api/sessions/{id}/message", post(message_session))
+        .route("/api/sessions/{id}/accept-preview", get(accept_preview))
+        .route("/api/sessions/{id}/accept", post(accept_session))
+        .route("/api/sessions/{id}/discard", post(discard_session))
+        .route("/api/sessions/{id}/keep", post(keep_session))
         .route("/ws", get(ws_handler))
         // Local single-user tool: only loopback pages (the Vite dev
         // client) may call this API from a browser. A permissive
@@ -452,6 +476,14 @@ async fn create_session(
     } else {
         (None, None, None)
     };
+    // The T6 merge target: whatever is checked out when the
+    // quest starts. Watcher-only quests merge nothing, so they
+    // record none.
+    let base_branch = if body.spawn {
+        crate::worktree::current_branch(&root).ok()
+    } else {
+        None
+    };
     let session = match state.store.create_session_guarded(
         &body.repo_path,
         body.island_id.as_deref(),
@@ -460,6 +492,7 @@ async fn create_session(
         model.as_deref(),
         effort.as_deref(),
         agent.as_deref(),
+        base_branch.as_deref(),
     ) {
         Ok(s) => s,
         Err(e @ crate::store::CreateError::IslandLocked { .. })
@@ -1094,6 +1127,7 @@ async fn stop_session(
         )
         .into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     // State first: the CLI reader checks it before logging anything
     // more, so nothing can land after the stopped event. A session
     // that already ended cannot stop again.
@@ -1148,6 +1182,7 @@ async fn pause_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state.store.transition_state(&id, &["working"], "paused") {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1169,6 +1204,7 @@ async fn resume_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     if let Ok(Some(session)) = state.store.get_session(&id) {
         if let Some(island_id) = session.island_id.as_deref() {
             if let Ok(Some(holder)) =
@@ -1219,7 +1255,16 @@ async fn resume_session(
 /// that landed after the finish wins. The island lock is
 /// re-checked: finishing released the island, and another quest
 /// may hold it now — the message then stays queued, in words.
+/// Queued-message auto-start for the CLI-reader completion
+/// paths: takes the session lock first, so a follow-up run can
+/// never start inside an Accept/Discard window. Callers that
+/// already hold the lock use `run_pending_message_locked`.
 async fn run_pending_message(state: Arc<AppState>, session_id: &str) {
+    let _session_guard = state.session_lock(session_id).lock_owned().await;
+    run_pending_message_locked(state, session_id).await;
+}
+
+async fn run_pending_message_locked(state: Arc<AppState>, session_id: &str) {
     let Ok(Some(session)) = state.store.get_session(session_id) else {
         return;
     };
@@ -1227,6 +1272,13 @@ async fn run_pending_message(state: Arc<AppState>, session_id: &str) {
         return;
     };
     if session.worktree_path.is_none() {
+        return;
+    }
+    if session.state != "finished" {
+        // A route moved the quest while this waited on the lock
+        // (accepted, discarded, stopped): nothing to start, and
+        // no message belongs on a closed quest. The pending text
+        // stays put rather than vanishing silently.
         return;
     }
     if let Some(island_id) = session.island_id.as_deref() {
@@ -1303,6 +1355,7 @@ async fn message_session(
     if body.task.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "message is empty".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state.store.get_session(&id) {
         Ok(Some(s)) => s,
         Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
@@ -1321,7 +1374,7 @@ async fn message_session(
             // accepted message is never stranded in the queue.
             // A second message replaces the queued one.
             if session.state == "working" {
-                run_pending_message(state.clone(), &id).await;
+                run_pending_message_locked(state.clone(), &id).await;
             }
             let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
             session_json(&updated).into_response()
@@ -1344,9 +1397,10 @@ async fn archive_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state
         .store
-        .transition_state(&id, &["finished", "failed", "stopped"], "archived")
+        .transition_state(&id, &["finished", "failed", "stopped", "accepted", "discarded", "kept"], "archived")
     {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1360,9 +1414,10 @@ struct FollowUp {
     task: String,
 }
 
-/// Follow-up (T5): a finished or failed quest gets a new task in
-/// the same CLI conversation and the same worktree. Without a CLI
-/// session id there is no conversation to continue: honest 409.
+/// Follow-up (T5): a finished, failed, or kept quest gets a new
+/// task in the same CLI conversation and the same worktree. This
+/// is also the conflict path's "send back to fix it". Without a
+/// CLI session id there is no conversation to continue: honest 409.
 async fn follow_up_session(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -1375,6 +1430,7 @@ async fn follow_up_session(
     if body.task.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "task is empty".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let before = match state.store.get_session(&id) {
         Ok(Some(s)) => s,
         Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
@@ -1390,7 +1446,7 @@ async fn follow_up_session(
     }
     let session = match state
         .store
-        .transition_state(&id, &["finished", "failed"], "working")
+        .transition_state(&id, &["finished", "failed", "kept", "stopped"], "working")
     {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1402,6 +1458,489 @@ async fn follow_up_session(
     spawn_agent(&before, state.clone(), root, body.task.clone(), Some(cli_id));
     let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
     session_json(&updated).into_response()
+}
+
+/// How long the post-merge checks may run before Accept calls
+/// them failed and rolls the merge back.
+const TEST_TIMEOUT_SECS: u64 = 300;
+
+/// Last characters of the check output kept for the card.
+const TEST_TAIL_CHARS: usize = 2000;
+
+/// Grace past the kill during which the output reader may
+/// finish; then Accept proceeds without the tail rather than
+/// hanging on a pipe a straggler holds.
+const READER_GRACE_SECS: u64 = 10;
+
+/// Probe before the orphan reap: pipes held past this after a
+/// NORMAL exit can only be orphaned grandchildren (nothing else
+/// inherits these pipes), so the group kill below is targeted.
+/// The happy path drains at once and never pays this second.
+const ORPHAN_PROBE_SECS: u64 = 1;
+
+/// SIGKILL a whole process group (Unix). Best effort by design:
+/// a reaped group (ESRCH) is the common case. Known limit: the id
+/// is the reaped leader's, so a fully exited group whose id the
+/// kernel recycled could misdirect the signal. That needs tens of
+/// thousands of forks inside the grace window plus the recycled id
+/// becoming a new group leader; the timeout path has always
+/// carried the same risk, and no race-free liveness check exists
+/// (killpg with signal 0 shares the TOCTOU).
+#[cfg(unix)]
+fn kill_process_group(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        unsafe {
+            libc::killpg(pid as i32, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: Option<u32>) {}
+
+/// Run the discovered test command in `dir`: no shell, output
+/// piped, killed on timeout. Returns (passed, output tail).
+async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    let mut parts = command.split_whitespace();
+    let Some(program) = parts.next() else {
+        return (false, "empty test command".to_string());
+    };
+    let args: Vec<&str> = parts.collect();
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(&args)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Own process group, Unix only (inherent tokio method):
+    // the kills below then reach grandchildren (node, vitest)
+    // too, so no orphan can hold the pipes (or the machine).
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return (false, format!("could not run {command}: {e}")),
+    };
+    // Read now: the handle may stop reporting it after exit.
+    let pid = child.id();
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    // Both pipes drain at once: a suite loud on stderr must not
+    // wedge while stdout is being read.
+    let mut reader = tokio::spawn(async move {
+        let drain_out = async {
+            let mut v = Vec::new();
+            if let Some(o) = stdout.as_mut() {
+                let _ = o.read_to_end(&mut v).await;
+            }
+            v
+        };
+        let drain_err = async {
+            let mut v = Vec::new();
+            if let Some(e) = stderr.as_mut() {
+                let _ = e.read_to_end(&mut v).await;
+            }
+            v
+        };
+        tokio::join!(drain_out, drain_err)
+    });
+    // One waiter at a time: on timeout the wait future drops
+    // and the handle stays usable for the kill below.
+    let (timed_out, status) = match tokio::time::timeout(Duration::from_secs(TEST_TIMEOUT_SECS), child.wait()).await
+    {
+        Ok(Ok(status)) => (false, Some(status)),
+        Ok(Err(_)) => (false, None),
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            // The direct child is dead; reap the group so no
+            // grandchild holds the pipes (or the machine).
+            kill_process_group(pid);
+            (true, None)
+        }
+    };
+    // The common case drains at once. Pipes still open past
+    // the probe after a NORMAL exit mean orphaned grandchildren
+    // (only they inherit these pipes): reap the group to unblock
+    // the drain. After a timeout the group is already reaped.
+    let first = tokio::time::timeout(Duration::from_secs(ORPHAN_PROBE_SECS), &mut reader).await;
+    if first.is_err() && !timed_out {
+        kill_process_group(pid);
+    }
+    let (out, err) = match first {
+        Ok(Ok((o, e))) => (o, e),
+        Ok(Err(_)) => (Vec::new(), b"(check output lost: the reader task failed)\n".to_vec()),
+        Err(_) => match tokio::time::timeout(Duration::from_secs(READER_GRACE_SECS), &mut reader).await {
+            Ok(Ok((o, e))) => (o, e),
+            // A straggler outside the group still holds a pipe
+            // (it escaped the group, or this is not Unix): stop
+            // the reader and proceed with a note instead of
+            // hanging. The straggler exits alone.
+            _ => {
+                reader.abort();
+                (Vec::new(), b"(output lost: a test subprocess outlived the run and held the pipes)\n".to_vec())
+            }
+        },
+    };
+    if !timed_out {
+        // Final reap: grandchildren that never held the pipes
+        // (redirected output, daemonized servers) survive the
+        // drain above. Nothing a check spawns may outlive it; a
+        // fully exited group answers ESRCH.
+        kill_process_group(pid);
+    }
+    let mut text = String::from_utf8_lossy(&out).into_owned();
+    text.push_str(&String::from_utf8_lossy(&err));
+    let tail: String = text.chars().skip(text.chars().count().saturating_sub(TEST_TAIL_CHARS)).collect();
+    if timed_out {
+        return (false, format!("timed out after {TEST_TIMEOUT_SECS}s; last output:\n{tail}"));
+    }
+    (status.is_some_and(|s| s.success()), tail)
+}
+
+/// Read-only Accept preview for the report card (T6): the merge
+/// target, what is checked out now, dirty files, and the test
+/// command that would run. The POST re-checks everything.
+async fn accept_preview(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    let state_ok = ["stopped", "finished", "failed", "kept"].contains(&session.state.as_str());
+    let worktree_exists = session.worktree_path.as_deref().is_some_and(|p| {
+        let path = PathBuf::from(p);
+        path.is_dir() && path.join(".git").exists()
+    });
+    let root = PathBuf::from(&session.repo_path);
+    let current_branch = crate::worktree::current_branch(&root).ok();
+    let on_target = match (&session.base_branch, &current_branch) {
+        (Some(base), Some(current)) => base == current,
+        _ => false,
+    };
+    let dirty_files = crate::worktree::dirty_files(&root).unwrap_or_default();
+    let merge_in_progress = crate::worktree::merge_in_progress(&root);
+    let test = crate::worktree::discover_test_command(&root).map(|t| {
+        serde_json::json!({
+            "command": t.command,
+            "source": t.source,
+            "dir": t.dir.to_string_lossy(),
+        })
+    });
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session": serde_json::to_value(&session).unwrap(),
+            "state_ok": state_ok,
+            "worktree_exists": worktree_exists,
+            "base_branch": session.base_branch,
+            "current_branch": current_branch,
+            "on_target": on_target,
+            "dirty_files": dirty_files,
+            "merge_in_progress": merge_in_progress,
+            "test": test,
+        })),
+    )
+        .into_response()
+}
+
+/// Accept (T6): merge the session branch into the branch that was
+/// checked out at creation, then re-run the checks. Every guard
+/// refuses with the reason: wrong state, no worktree, unknown
+/// target, wrong checkout, unfinished or dirty main, conflict,
+/// failing checks (the merge is rolled back). A merged quest
+/// loses its worktree and branch; retrying after a half-failure
+/// is safe (an already-merged branch merges to a no-op).
+async fn accept_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    if ["working", "paused"].contains(&session.state.as_str()) {
+        return err(
+            StatusCode::CONFLICT,
+            format!("the quest is still {}; stop it first, then accept", session.state),
+        )
+        .into_response();
+    }
+    if !["stopped", "finished", "failed", "kept"].contains(&session.state.as_str()) {
+        return err(
+            StatusCode::CONFLICT,
+            format!("a {} quest cannot be accepted", session.state),
+        )
+        .into_response();
+    }
+    let Some(wt) = session.worktree_path.clone() else {
+        return err(StatusCode::CONFLICT, "this quest has no worktree: there is nothing to merge".to_string())
+            .into_response();
+    };
+    let wt_path = PathBuf::from(&wt);
+    if !(wt_path.is_dir() && wt_path.join(".git").exists()) {
+        return err(StatusCode::CONFLICT, "the quest worktree is gone; there is nothing to merge".to_string())
+            .into_response();
+    }
+    let Some(base) = session.base_branch.clone() else {
+        return err(
+            StatusCode::CONFLICT,
+            "this quest started before the finish flow learned merge targets; its target branch was never recorded".to_string(),
+        )
+        .into_response();
+    };
+    if base == "HEAD" {
+        return err(
+            StatusCode::CONFLICT,
+            "the main checkout was detached when this quest started, so it has no merge target".to_string(),
+        )
+        .into_response();
+    }
+    let root = PathBuf::from(&session.repo_path);
+    let current = match crate::worktree::current_branch(&root) {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the main checkout: {e}")).into_response(),
+    };
+    if current != base {
+        return err(
+            StatusCode::CONFLICT,
+            format!("the main checkout is on {current}; switch it to {base} to accept this quest"),
+        )
+        .into_response();
+    }
+    if crate::worktree::merge_in_progress(&root) {
+        return err(
+            StatusCode::CONFLICT,
+            "the main checkout has an unfinished merge; finish or abort it first".to_string(),
+        )
+        .into_response();
+    }
+    let dirty = match crate::worktree::dirty_files(&root) {
+        Ok(d) => d,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the main checkout: {e}")).into_response(),
+    };
+    if !dirty.is_empty() {
+        return err(
+            StatusCode::CONFLICT,
+            format!("the main checkout has uncommitted changes ({}); commit or stash them first", dirty.join(", ")),
+        )
+        .into_response();
+    }
+    // The agent never commits; Accept lands its uncommitted work
+    // on the session branch first, labeled as such.
+    match crate::worktree::dirty_files(&wt_path) {
+        Ok(d) if !d.is_empty() => {
+            let short = &session.id[..session.id.len().min(8)];
+            if let Err(e) = crate::worktree::commit_all(&wt_path, &format!("Repo City: accept quest {short} work")) {
+                return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not commit the quest work: {e}")).into_response();
+            }
+        }
+        Ok(_) => {}
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the quest worktree: {e}")).into_response(),
+    }
+    let branch = crate::worktree::branch_for(&session.id);
+    let pre_sha = match crate::worktree::head_sha(&root) {
+        Ok(sha) => sha,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the main checkout: {e}")).into_response(),
+    };
+    let merge_sha = match crate::worktree::merge_branch(&root, &branch) {
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("the merge failed: {e}")).into_response(),
+        Ok(crate::worktree::MergeOutcome::Conflict { files }) => {
+            return err(
+                StatusCode::CONFLICT,
+                format!("the merge conflicts on {}; send the quest back to fix it, or discard", files.join(", ")),
+            )
+            .into_response();
+        }
+        Ok(crate::worktree::MergeOutcome::Merged { sha }) => sha,
+    };
+    // Checks re-run after every merge, in the merged tree.
+    let test = crate::worktree::discover_test_command(&root);
+    let (test_command, test_source, test_passed, test_output) = match &test {
+        None => (None, None, None, "no test command found (package.json, justfile, Makefile); not run".to_string()),
+        Some(t) => {
+            let (passed, tail) = run_checks(&t.dir, &t.command).await;
+            (Some(t.command.clone()), Some(t.source.clone()), Some(passed), tail)
+        }
+    };
+    // The check outcome is a real test result: the island flies
+    // the pennant and the card quotes it. "Not run" logs nothing.
+    if let (Some(cmd), Some(passed)) = (&test_command, test_passed) {
+        let _ = state.emit(
+            &id,
+            Source::System,
+            EventPayload::TestResult {
+                passed,
+                summary: format!("{cmd} after merge: {}", if passed { "passed" } else { "failed" }),
+            },
+        );
+    }
+    if test_passed == Some(false) {
+        let _ = crate::worktree::reset_hard(&root, &pre_sha);
+        return err(
+            StatusCode::CONFLICT,
+            format!(
+                "checks failed ({} from {}); the merge was rolled back. Last output:\n{}",
+                test_command.unwrap_or_default(),
+                test_source.unwrap_or_default(),
+                test_output
+            ),
+        )
+        .into_response();
+    }
+    // Cleanup is janitorial: the work is merged and the checks
+    // passed, so a failure here must not strand the quest in a
+    // state no retry can leave (the dir may already be gone). The
+    // quest accepts; the warning names the leftover branch and
+    // the manual command that finishes the job.
+    let cleanup_warning = match crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
+        Ok(()) => None,
+        Err(e) => Some(format!(
+            "the worktree cleanup failed ({e}); the work is merged, but finish by hand: {}",
+            crate::worktree::manual_cleanup_hint(&root, &wt_path, &branch),
+        )),
+    };
+    let session = match state.store.transition_state(&id, &["stopped", "finished", "failed", "kept"], "accepted") {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let checks = match (&test_command, test_passed) {
+        (Some(cmd), Some(true)) => format!("checks passed ({cmd})"),
+        _ => "checks not run (no test command found)".to_string(),
+    };
+    let _ = state.emit(
+        &id,
+        Source::System,
+        EventPayload::AgentMessage {
+            text: format!(
+                "Quest accepted: merged {branch} into {base} ({}). {checks}.{}",
+                &merge_sha[..merge_sha.len().min(8)],
+                cleanup_warning.as_deref().map(|w| format!(" Warning: {w}")).unwrap_or_default()
+            ),
+        },
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session": serde_json::to_value(&session).unwrap(),
+            "merge_sha": merge_sha,
+            "test_command": test_command,
+            "test_source": test_source,
+            "test_passed": test_passed,
+            "test_output": test_output,
+            "cleanup_warning": cleanup_warning,
+        })),
+    )
+        .into_response()
+}
+
+/// Discard (T6): the worktree and session branch go away after the
+/// card's explicit confirmation. Allowed from any live state: a
+/// running quest is stopped first. Already-accepted or already-
+/// discarded quests refuse.
+async fn discard_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    if ["accepted", "discarded"].contains(&session.state.as_str()) {
+        return err(StatusCode::CONFLICT, format!("the quest is already {}", session.state)).into_response();
+    }
+    // The state move is the commit point: teardown_runtime
+    // requires it first, and a cleanup failure below must never
+    // resurrect the quest. The lock rules out races between the
+    // read above and this move.
+    let live = ["working", "paused"].contains(&session.state.as_str());
+    let session = match state.store.transition_state(
+        &id,
+        &["working", "paused", "stopped", "finished", "failed", "kept", "archived"],
+        "discarded",
+    ) {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    if live {
+        state.teardown_runtime(&id).await;
+    }
+    let root = PathBuf::from(&session.repo_path);
+    let mut gone_already = true;
+    if let Some(wt) = session.worktree_path.as_deref() {
+        let wt_path = PathBuf::from(wt);
+        gone_already = !wt_path.exists();
+        if let Err(e) = crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
+            // No API retry: a second Discard refuses an already
+            // discarded quest, and a held branch would fail again
+            // anyway. The message carries the manual command.
+            let branch = crate::worktree::branch_for(&session.id);
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "the quest is discarded, but the worktree removal failed: {e}; finish by hand: {}",
+                    crate::worktree::manual_cleanup_hint(&root, &wt_path, &branch),
+                ),
+            )
+            .into_response();
+        }
+    }
+    let _ = state.emit(
+        &id,
+        Source::System,
+        EventPayload::AgentMessage {
+            text: if gone_already {
+                "Quest discarded: the worktree was already gone.".to_string()
+            } else {
+                "Quest discarded: the worktree and session branch were removed.".to_string()
+            },
+        },
+    );
+    session_json(&session).into_response()
+}
+
+/// Keep for later (T6): the worktree stays untouched and the
+/// quest reads finished-unmerged. The island lock is already
+/// released (it covers working/paused only).
+async fn keep_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
+    let session = match state.store.transition_state(&id, &["stopped", "finished", "failed"], "kept") {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let _ = state.emit(
+        &id,
+        Source::System,
+        EventPayload::AgentMessage {
+            text: "Quest kept for later: the worktree stays untouched.".to_string(),
+        },
+    );
+    session_json(&session).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1539,5 +2078,185 @@ mod agent_choice_tests {
         assert!(v("claude", "claude-X", "low").is_err());
         let too_long = format!("claude-{}", "a".repeat(60));
         assert!(v("claude", &too_long, "low").is_err());
+    }
+}
+
+#[cfg(test)]
+mod run_checks_tests {
+    use super::{run_checks, TEST_TAIL_CHARS};
+    use std::time::Duration;
+
+    // Opus review P1-4: 200KB on stderr must not wedge the drain.
+    // (Script files: run_checks splits the command on whitespace,
+    // so no quoting survives.)
+    #[tokio::test]
+    async fn checks_drain_a_loud_stderr_without_wedging() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("loud.py"), "import sys\nsys.stderr.write('x'*200000)\n").unwrap();
+        let (passed, tail) = run_checks(dir.path(), "python3 loud.py").await;
+        assert!(passed);
+        assert_eq!(tail.chars().count(), TEST_TAIL_CHARS);
+    }
+
+    // Opus review P1-5: an orphaned grandchild must not hold the
+    // pipes past the grace period (old code: a 60 s hang here).
+    // Codex review P2: the group reap must actually kill the
+    // orphan — Accept returns with nothing left behind.
+    // Opus re-review P2: that includes a grandchild with
+    // redirected output, which never holds the pipes.
+    #[tokio::test]
+    async fn checks_do_not_wait_out_orphaned_grandchildren() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("orphan.sh"),
+            "#!/bin/sh\nsleep 60 & echo $! > sleep.pid\nsleep 61 >/dev/null 2>&1 & echo $! > sleep2.pid\nexit 1\n",
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        let (passed, _) = run_checks(dir.path(), "sh orphan.sh").await;
+        assert!(!passed);
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "took {:?}",
+            start.elapsed()
+        );
+        // Both orphans are reaped (Unix: the reap is a no-op stub
+        // elsewhere, so the pid check only runs where killpg
+        // exists). kill(pid, 0) also answers 0 for a zombie, so
+        // this assumes PID 1 reaps promptly (launchd does; a Linux
+        // container without init would fail here — the repo has no
+        // Linux CI, and the gates run on macOS).
+        #[cfg(unix)]
+        {
+            for pid_file in ["sleep.pid", "sleep2.pid"] {
+                assert_pid_dead(&dir.path().join(pid_file)).await;
+            }
+        }
+    }
+
+    // The pipe-holding orphan above trips the probe reap, which
+    // would kill a detached sibling too — so this case, with ONLY
+    // redirected descendants, is what pins the final reap. Remove
+    // the final kill and detached.pid stays alive.
+    #[tokio::test]
+    async fn checks_reap_detached_grandchildren() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("detached.sh"),
+            "#!/bin/sh\nsleep 62 >/dev/null 2>&1 & echo $! > detached.pid\nexit 0\n",
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        let (passed, _) = run_checks(dir.path(), "sh detached.sh").await;
+        assert!(passed);
+        // The drain completes at once (nothing holds the pipes),
+        // so the probe never fires: only the final reap can kill
+        // the detached sleep.
+        assert!(start.elapsed() < Duration::from_secs(30), "took {:?}", start.elapsed());
+        #[cfg(unix)]
+        {
+            assert_pid_dead(&dir.path().join("detached.pid")).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn assert_pid_dead(pid_file: &std::path::Path) {
+        let pid: i32 = std::fs::read_to_string(pid_file).unwrap().trim().parse().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "orphaned sleep {pid} still alive");
+    }
+}
+
+#[cfg(test)]
+mod pending_message_tests {
+    use super::{run_pending_message, AppState};
+    use crate::events::EventPayload;
+    use crate::store::Store;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    fn test_state(store: Arc<Store>) -> Arc<AppState> {
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        Arc::new(AppState {
+            store,
+            tx,
+            watchers: Mutex::new(std::collections::HashMap::new()),
+            children: Mutex::new(std::collections::HashMap::new()),
+            spawning: Mutex::new(std::collections::HashSet::new()),
+            emit_lock: Arc::new(Mutex::new(())),
+            session_locks: Mutex::new(std::collections::HashMap::new()),
+            debounce: Duration::from_millis(50),
+        })
+    }
+
+    // Codex review P1: the completion-path auto-start takes the
+    // session lock, so no follow-up run can start inside an
+    // Accept/Discard window. The waiter sits behind an island
+    // lock (no CLI can spawn); the waits-event proves when the
+    // auto-start ran.
+    #[tokio::test]
+    async fn pending_followup_waits_for_the_session_lock() {
+        let store = Arc::new(Store::in_memory().unwrap());
+        let state = test_state(store.clone());
+        let holder = store
+            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None)
+            .unwrap();
+        assert_eq!(holder.state, "working");
+        let waiter = store
+            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None)
+            .unwrap();
+        store.set_state(&waiter.id, "finished").unwrap();
+        store.set_pending_task(&waiter.id, Some("go on")).unwrap();
+        store.set_worktree_path(&waiter.id, "/nowhere/wt").unwrap();
+
+        let guard = state.session_lock(&waiter.id).lock_owned().await;
+        let waiter_id = waiter.id.clone();
+        let task = tokio::spawn(async move { run_pending_message(state, &waiter_id).await });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(store.events_for(&waiter.id, 0).unwrap().is_empty());
+        drop(guard);
+        task.await.unwrap();
+
+        let events = store.events_for(&waiter.id, 0).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0].payload,
+            EventPayload::AgentMessage { text } if text.contains("Queued message waits")
+        ));
+        let back = store.get_session(&waiter.id).unwrap().unwrap();
+        assert_eq!(back.state, "finished");
+        assert_eq!(back.pending_task.as_deref(), Some("go on"));
+    }
+
+    // Opus re-review: an auto-start that waited out an Accept or
+    // Discard finds a closed quest and stays silent — no
+    // "Queued message waits" on a quest that can never run. The
+    // pending text stays put rather than vanishing.
+    #[tokio::test]
+    async fn pending_followup_stays_silent_on_a_closed_quest() {
+        let store = Arc::new(Store::in_memory().unwrap());
+        let state = test_state(store.clone());
+        store
+            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None)
+            .unwrap();
+        let waiter = store
+            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None)
+            .unwrap();
+        store.set_state(&waiter.id, "finished").unwrap();
+        store.set_pending_task(&waiter.id, Some("go on")).unwrap();
+        store.set_worktree_path(&waiter.id, "/nowhere/wt").unwrap();
+        // Accept (or Discard) moved the quest while the auto-start
+        // waited on the session lock.
+        store.set_state(&waiter.id, "discarded").unwrap();
+
+        run_pending_message(state.clone(), &waiter.id).await;
+
+        assert!(store.events_for(&waiter.id, 0).unwrap().is_empty());
+        let back = store.get_session(&waiter.id).unwrap().unwrap();
+        assert_eq!(back.state, "discarded");
+        assert_eq!(back.pending_task.as_deref(), Some("go on"));
     }
 }

@@ -14,6 +14,7 @@ import {
   type SessionInfo,
 } from "./live";
 import type { StoredEvent } from "../events/types";
+import { stallText } from "./finish";
 
 export const MAX_ACTIVE_QUESTS = 3;
 
@@ -30,6 +31,26 @@ export function countsTowardCap(s: SessionInfo): boolean {
   return s.state === "working" && s.worktree_path !== null;
 }
 
+/** Token label: the task first (at-a-glance ID, no hover
+ * needed), then the island and the state. Long tasks truncate
+ * in CSS; the full task shows in the hover card. */
+export function tokenLabel(task: string | null, island: string, state: string, stall: string | null): string {
+  const what = task?.trim() ? task.trim() : "untitled";
+  return `${what} · ${island} · ${stateText(state)}${stall ? ` · ${stall}` : ""}`;
+}
+
+/** Hover card content: the full task plus island, state, stall.
+ * Instant and styled, unlike the slow native tooltip. */
+export function hoverCard(
+  task: string | null,
+  island: string,
+  state: string,
+  stall: string | null,
+): { title: string; meta: string } {
+  const title = task?.trim() ? task.trim() : "Untitled quest";
+  return { title, meta: `${island} · ${stateText(state)}${stall ? ` · ${stall}` : ""}` };
+}
+
 /** Plain words for a server state; unknown states pass through. */
 export function stateText(state: string): string {
   switch (state) {
@@ -38,6 +59,9 @@ export function stateText(state: string): string {
     case "stopped": return "stopped";
     case "finished": return "finished";
     case "failed": return "crashed";
+    case "kept": return "kept";
+    case "accepted": return "accepted";
+    case "discarded": return "discarded";
     case "archived": return "archived";
     default: return state;
   }
@@ -58,7 +82,8 @@ export function capState(sessions: SessionInfo[]): CapState {
 
 /** Actions the quest log may offer (server enforces). Follow-up
  * needs a CLI session to continue; without one the server 409s,
- * so it is not offered. */
+ * so it is not offered. Accept, Discard, and Keep live on the
+ * report card, not here (design: finish flow). */
 export function actionsFor(s: SessionInfo): string[] {
   const follow = s.cli_session_id ? ["follow-up"] : [];
   switch (s.state) {
@@ -66,7 +91,10 @@ export function actionsFor(s: SessionInfo): string[] {
     case "paused": return ["resume", "stop"];
     case "finished": return [...follow, "archive", "report"];
     case "failed": return [...follow, "archive", "report"];
-    case "stopped": return ["archive", "report"];
+    case "stopped": return [...follow, "archive", "report"];
+    case "kept": return [...follow, "archive", "report"];
+    case "accepted": return ["archive", "report"];
+    case "discarded": return ["archive", "report"];
     default: return [];
   }
 }
@@ -169,6 +197,8 @@ export class HarborBar {
 
   constructor(deps: HarborDeps) {
     this.deps = deps;
+    // A scrolled row detaches the card from its token: drop it.
+    el("tokens").addEventListener("scroll", () => this.hideHover());
     el("new-quest").addEventListener("click", () => this.toggleLog());
     el("questlog-close").addEventListener("click", () => this.closeQuest());
     el("create-btn").addEventListener("click", () => void this.create());
@@ -255,6 +285,32 @@ export class HarborBar {
     this.deps.onSessionsChanged(this.sessions);
   }
 
+  /** Instant hover card above the token: the full task plus
+   * island, state, stall. No show delay, unlike the native
+   * tooltip it replaces. */
+  private showHover(anchor: HTMLElement, s: SessionInfo): void {
+    const card = el("hovercard");
+    const { title, meta } = hoverCard(s.task, this.islandName(s.island_id), s.state, stallText(s, Date.now()));
+    card.innerHTML = "";
+    const t = document.createElement("div");
+    t.className = "hover-title";
+    t.textContent = title;
+    const m = document.createElement("div");
+    m.className = "hover-meta";
+    m.textContent = meta;
+    card.append(t, m);
+    card.style.display = "block";
+    // The bar spans the full width, so viewport and bar
+    // coordinates align; clamp the card into the viewport.
+    const r = anchor.getBoundingClientRect();
+    const w = card.offsetWidth;
+    card.style.left = `${Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - w - 8))}px`;
+  }
+
+  private hideHover(): void {
+    el("hovercard").style.display = "none";
+  }
+
   private selected(): SessionInfo | null {
     return this.sessions.find((s) => s.id === this.selectedId) ?? null;
   }
@@ -266,6 +322,8 @@ export class HarborBar {
   }
 
   private render(): void {
+    // Tokens rebuild below: drop a card anchored to a dead node.
+    this.hideHover();
     const wrap = el("tokens");
     wrap.innerHTML = "";
     // Stable order (newest first): a quest never jumps along the
@@ -281,11 +339,16 @@ export class HarborBar {
       sail.alt = "";
       const label = document.createElement("span");
       label.className = "token-text";
-      label.textContent = `${this.islandName(s.island_id)} · ${stateText(s.state)}`;
+      // A stalled quest names its silence on the token, with
+      // a pulsing amber dot instead of the working one.
+      const stall = stallText(s, Date.now());
+      label.textContent = tokenLabel(s.task, this.islandName(s.island_id), s.state, stall);
       const dot = document.createElement("span");
-      dot.className = `dot dot-${s.state}`;
+      dot.className = stall ? "dot dot-stalled" : `dot dot-${s.state}`;
       b.append(sail, label, dot);
-      b.title = s.task ?? "";
+      b.setAttribute("aria-label", label.textContent ?? "");
+      b.addEventListener("mouseenter", () => this.showHover(b, s));
+      b.addEventListener("mouseleave", () => this.hideHover());
       b.addEventListener("click", () => {
         this.selectedId = s.id === this.selectedId ? null : s.id;
         this.deps.onFollow?.(this.selectedId ? s : null);
@@ -328,7 +391,11 @@ export class HarborBar {
     detail.style.display = "block";
     el("detail-title").textContent = s.task ?? "Untitled quest";
     const chosen = [agentLabel(s), s.model, s.effort].filter(Boolean).join(" · ");
-    el("detail-state").textContent = `${this.islandName(s.island_id)} — ${stateText(s.state)}${chosen ? ` · ${chosen}` : ""}`;
+    const stall = stallText(s, Date.now());
+    el("detail-state").textContent =
+      `${this.islandName(s.island_id)} — ${stateText(s.state)}${stall ? ` · ${stall}` : ""}${chosen ? ` · ${chosen}` : ""}`;
+    // A stalled quest already offers Nudge (the message box: the
+    // message runs when this run ends) and Stop below.
     const canMessage = s.worktree_path !== null && (s.state === "working" || s.state === "paused");
     el("msg-row").style.display = canMessage ? "" : "none";
     const msgNote = el("msg-note");
@@ -340,6 +407,10 @@ export class HarborBar {
     }
     void this.loadFeed(s);
     const allowed = actionsFor(s);
+    // The whole follow-up row (label, input, button) hides when
+    // the quest cannot take one; the button alone used to hide
+    // and left its input dangling (QA2).
+    el("follow-row").style.display = allowed.includes("follow-up") ? "" : "none";
     for (const [id, action] of [
       ["act-pause", "pause"],
       ["act-resume", "resume"],

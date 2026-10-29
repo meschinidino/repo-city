@@ -5,9 +5,10 @@ import { occlusion } from "./map/placement";
 import { PASS } from "./map/checks";
 import { layoutCity } from "./city/layoutCity";
 import { CityView } from "./city/renderCity";
-import { connectEvents, createSession, fetchExtraction, fetchReport, fetchSessionEvents, loadFailureText, stopSession, type SessionInfo } from "./city/live";
+import { acceptSession, connectEvents, createSession, fetchAcceptPreview, fetchExtraction, fetchReport, fetchSessionEvents, loadFailureText, sessionAction, stopSession, type AcceptPreview, type DiffReportView, type SessionInfo } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
-import { HarborBar } from "./city/bar";
+import { HarborBar, stateText } from "./city/bar";
+import { cleanupWarningLine, escHtml, isFinishable, lastFinishNote, lastTestResult, stallText, testLine } from "./city/finish";
 import type { SessionInfo as BarSession } from "./city/live";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -108,13 +109,17 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   // Harbor bar (T12): tokens for every session of this repo, the
   // quest log, and the report card. The event flow below still
   // follows this primary session.
+  let knownSessions: BarSession[] = [];
   const bar = new HarborBar({
     server,
     repo,
     islands: layout.islands.map((i) => ({ id: i.id, name: i.name })),
     onShowReport: (s) => void showReport(s),
     onTargetPicked: (id) => city.selectIsland(id),
-    onSessionsChanged: () => {},
+    onSessionsChanged: (ss) => {
+      knownSessions = ss;
+      refresh();
+    },
     onFollow: (s) => void follow(s),
   });
   city.onCanvasClick = (sx, sy) => {
@@ -202,10 +207,13 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   const refresh = (extra = "") => {
     exposed.view = view;
     city.update(view);
+    const known = knownSessions.find((x) => x.id === followed.id) ?? followed;
+    const stall = stallText(known, Date.now());
     status.textContent =
       `Repo City · ${layout.islands.length} islands · ${layout.buildings.length} buildings · session ${view.state}` +
       (view.shipFile ? ` · ship at ${view.shipFile}` : view.locationUnknown ? " · location unknown" : "") +
       (view.cliSessionId ? ` · cli ${view.cliSessionId.slice(0, 8)}` : "") +
+      (stall ? ` · stalled — ${stall}` : "") +
       droppedNote +
       extra;
   };
@@ -267,6 +275,210 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
 
   let reportSeq = 0;
   let reportIsland: string | null = null;
+
+  /** Session branch name (server branch_for): display only. */
+  const branchFor = (id: string) => `repo-city/${id.slice(0, 8)}`;
+
+  const reportText = (report: DiffReportView): string =>
+    report.available
+      ? `Report (${report.generated_by})\n${report.summary}`
+      : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`;
+
+  /** Finish section states: preview, one confirmation per
+   * destructive choice, result. Every view ends on Back, which
+   * reloads the card from the server. */
+  const renderFinish = (box: HTMLElement, forSession: BarSession, preview: AcceptPreview, events: StoredEvent[]) => {
+    const s = preview.session;
+    const note = lastFinishNote(events);
+    if (s.state === "accepted" || s.state === "discarded") {
+      box.innerHTML =
+        `<h3>Finish</h3><div class="report-line">${escHtml(note ?? `This quest was ${s.state}.`)}</div>` +
+        `<div class="report-line report-muted">Archive it from the quest log when done reading.</div>`;
+      return;
+    }
+    if (!isFinishable(s.state)) {
+      box.innerHTML =
+        `<h3>Finish</h3><div class="report-line report-muted">Finish opens when the quest stops (now: ${escHtml(stateText(s.state))}).</div>`;
+      return;
+    }
+    const lines = [
+      `Merge into: ${preview.base_branch ?? "unknown — this quest started before the finish flow"}`,
+      preview.current_branch
+        ? `Main checkout: ${preview.current_branch}${preview.on_target ? " (on target)" : preview.base_branch ? ` (switch to ${preview.base_branch} to accept)` : ""}`
+        : "Main checkout: unreadable",
+      preview.dirty_files.length ? `Uncommitted in main: ${preview.dirty_files.join(", ")}` : "Main checkout: clean",
+      ...(preview.merge_in_progress ? ["Main checkout: an unfinished merge waits — finish or abort it first"] : []),
+      ...(!preview.worktree_exists ? ["Quest worktree: gone — nothing left to merge"] : []),
+      preview.test ? `Checks: ${preview.test.command} (from ${preview.test.source})` : "Checks: not run — no test command found",
+    ];
+    box.innerHTML =
+      "<h3>Finish</h3>" +
+      lines.map((l) => `<div class="report-line">${escHtml(l)}</div>`).join("") +
+      `<div class="action-row"><button class="primary-btn" type="button" data-act="accept">Accept</button>` +
+      `<button class="ghost-btn" type="button" data-act="keep">Keep for later</button>` +
+      `<button class="ghost-btn" type="button" data-act="discard">Discard</button></div>`;
+    box.querySelector('[data-act="accept"]')!.addEventListener("click", () => confirmAccept(box, forSession, preview));
+    box.querySelector('[data-act="keep"]')!.addEventListener("click", () => void doKeep(box, forSession, preview));
+    box.querySelector('[data-act="discard"]')!.addEventListener("click", () => confirmDiscard(box, forSession, preview));
+  };
+
+  const backRow = `<div class="action-row"><button class="ghost-btn" type="button" data-act="back">Back to report</button></div>`;
+  const wireBack = (box: HTMLElement, forSession: BarSession) => {
+    box.querySelector('[data-act="back"]')!.addEventListener("click", () => void showReport(forSession));
+  };
+  const busy = (box: HTMLElement, text: string) => {
+    box.querySelectorAll("button").forEach((b) => {
+      (b as HTMLButtonElement).disabled = true;
+    });
+    const d = document.createElement("div");
+    d.className = "report-line report-muted";
+    d.dataset.role = "busy";
+    d.textContent = text;
+    box.appendChild(d);
+  };
+  /** Drop the busy note and unlock the buttons after a refusal. */
+  const unbusy = (box: HTMLElement) => {
+    box.querySelector('[data-role="busy"]')?.remove();
+    box.querySelectorAll("button").forEach((b) => {
+      (b as HTMLButtonElement).disabled = false;
+    });
+  };
+
+  const confirmAccept = (box: HTMLElement, forSession: BarSession, preview: AcceptPreview) => {
+    const s = preview.session;
+    const checks = preview.test ? `${preview.test.command} (from ${preview.test.source})` : "not run — no test command found";
+    box.innerHTML =
+      "<h3>Accept this quest?</h3>" +
+      `<div class="report-line">Merge branch ${escHtml(branchFor(s.id))} into ${escHtml(preview.base_branch ?? "unknown")}.</div>` +
+      `<div class="report-line">Uncommitted quest work is committed on the quest branch first.</div>` +
+      `<div class="report-line">Then checks run in your main checkout: ${escHtml(checks)}.</div>` +
+      `<div class="report-line report-muted">This changes your main checkout. A conflict or failing checks stops the merge.</div>` +
+      `<div class="action-row"><button class="primary-btn" type="button" data-act="go">Merge and run checks</button>` +
+      `<button class="ghost-btn" type="button" data-act="back">Back</button></div>` +
+      `<div class="report-err" data-role="err" style="display:none"></div>`;
+    wireBack(box, forSession);
+    box.querySelector('[data-act="go"]')!.addEventListener("click", () => void doAccept(box, forSession, s.id));
+  };
+
+  const doAccept = async (box: HTMLElement, forSession: BarSession, id: string) => {
+    busy(box, "Merging… checks can take minutes.");
+    try {
+      const r = await acceptSession(server, id);
+      const checks = r.test_command ? `Checks passed (${r.test_command}).` : "Checks not run (no test command found).";
+      const warning = cleanupWarningLine(r.cleanup_warning);
+      box.innerHTML =
+        "<h3>Accepted</h3>" +
+        `<div class="report-ok">${escHtml(`Merged into ${r.session.base_branch ?? "the main checkout"} (${r.merge_sha.slice(0, 8)}).`)}</div>` +
+        `<div class="report-line">${escHtml(checks)}</div>` +
+        (warning ? `<div class="report-err">${escHtml(warning)}</div>` : "") +
+        (r.test_output ? `<pre class="report-pre">${escHtml(r.test_output)}</pre>` : "") +
+        backRow;
+      wireBack(box, forSession);
+      void bar.refresh();
+      refresh();
+    } catch (e) {
+      const message = (e as Error).message;
+      const err = box.querySelector('[data-role="err"]')!;
+      err.textContent = message;
+      (err as HTMLElement).style.display = "block";
+      unbusy(box);
+      // The conflict path (design): the card keys off the
+      // server's conflict wording; any other refusal shows as
+      // text with a way back. If the wording ever changes, the
+      // error still shows — only the inline send-back hides.
+      if (message.includes("conflicts on")) {
+        const row = document.createElement("div");
+        row.innerHTML =
+          `<div class="report-line">Send the quest back to fix it, or discard:</div>` +
+          `<input type="text" data-role="fix" placeholder="What should the agent fix?" />` +
+          `<div class="action-row"><button class="primary-btn" type="button" data-act="sendback">Send back to fix</button></div>`;
+        box.appendChild(row);
+        row.querySelector('[data-act="sendback"]')!.addEventListener("click", () => void doSendBack(box, forSession, id));
+      }
+      placeReportCard(reportIsland);
+    }
+  };
+
+  const doSendBack = async (box: HTMLElement, forSession: BarSession, id: string) => {
+    const input = box.querySelector('[data-role="fix"]') as HTMLInputElement | null;
+    const err = box.querySelector('[data-role="err"]') as HTMLElement | null;
+    const task = input?.value.trim() ?? "";
+    if (!task) {
+      if (err) {
+        err.textContent = "Write what the agent should fix first.";
+        err.style.display = "block";
+      }
+      return;
+    }
+    busy(box, "Sending back…");
+    try {
+      await sessionAction(server, id, "follow-up", task);
+      box.innerHTML =
+        "<h3>Sent back</h3>" +
+        `<div class="report-line">The quest runs again with new instructions.</div>` +
+        backRow;
+      wireBack(box, forSession);
+      void bar.refresh();
+      refresh();
+    } catch (e) {
+      if (err) {
+        err.textContent = (e as Error).message;
+        err.style.display = "block";
+      }
+      unbusy(box);
+    }
+  };
+
+  const confirmDiscard = (box: HTMLElement, forSession: BarSession, preview: AcceptPreview) => {
+    box.innerHTML =
+      "<h3>Discard this quest?</h3>" +
+      `<div class="report-line">Remove the worktree and branch ${escHtml(branchFor(preview.session.id))}.</div>` +
+      `<div class="report-line">Unmerged work is deleted. This cannot be undone.</div>` +
+      `<div class="action-row"><button class="primary-btn" type="button" data-act="go">Discard the work</button>` +
+      `<button class="ghost-btn" type="button" data-act="back">Back</button></div>` +
+      `<div class="report-err" data-role="err" style="display:none"></div>`;
+    wireBack(box, forSession);
+    box.querySelector('[data-act="go"]')!.addEventListener("click", () => void doDiscard(box, forSession, preview.session.id));
+  };
+
+  const doDiscard = async (box: HTMLElement, forSession: BarSession, id: string) => {
+    busy(box, "Discarding…");
+    try {
+      await sessionAction(server, id, "discard");
+      box.innerHTML = "<h3>Discarded</h3>" + `<div class="report-line">Quest discarded: the worktree and session branch were removed.</div>` + backRow;
+      wireBack(box, forSession);
+      void bar.refresh();
+      refresh();
+    } catch (e) {
+      box.innerHTML = `<h3>Discard</h3><div class="report-err">${escHtml((e as Error).message)}</div>` + backRow;
+      wireBack(box, forSession);
+    }
+  };
+
+  const doKeep = async (box: HTMLElement, forSession: BarSession, preview: AcceptPreview) => {
+    busy(box, "Keeping…");
+    try {
+      await sessionAction(server, preview.session.id, "keep");
+      box.innerHTML =
+        "<h3>Kept for later</h3>" + `<div class="report-line">Quest kept for later: the worktree stays untouched.</div>` + backRow;
+      wireBack(box, forSession);
+      void bar.refresh();
+      refresh();
+    } catch (e) {
+      box.innerHTML = `<h3>Keep for later</h3><div class="report-err">${escHtml((e as Error).message)}</div>` + backRow;
+      wireBack(box, forSession);
+    }
+  };
+
+  const renderReportCard = (el: HTMLElement, forSession: BarSession, report: DiffReportView, preview: AcceptPreview, events: StoredEvent[]) => {
+    const tr = lastTestResult(events);
+    el.innerHTML =
+      `<div>${escHtml(reportText(report))}</div>` +
+      (tr ? `<div class="report-test ${tr.passed ? "report-test-pass" : "report-test-fail"}">${escHtml(testLine(tr))}</div>` : "") +
+      `<div class="report-finish"></div>`;
+    renderFinish(el.querySelector(".report-finish")!, forSession, preview, events);
+  };
+
   const showReport = async (forSession: BarSession = session) => {
     const seq = ++reportSeq;
     reportIsland = forSession.island_id;
@@ -274,13 +486,15 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     el.textContent = "Loading the report…";
     placeReportCard(reportIsland);
     try {
-      const report = await fetchReport(server, forSession.id);
+      const [report, preview, events] = await Promise.all([
+        fetchReport(server, forSession.id),
+        fetchAcceptPreview(server, forSession.id),
+        fetchSessionEvents(server, forSession.id),
+      ]);
       if (seq !== reportSeq) return; // a newer report owns the card
       if (forSession.id === session.id) exposed.report = report;
-      el.textContent = (report.available
-        ? `Report (${report.generated_by})\n${report.summary}`
-        : `Report unavailable (${report.generated_by})\n${report.reason ?? "no reason given"}\n${report.events?.length ?? 0} raw events recorded; no polished report was invented.`)
-        + "\n\nFinish flow arrives in step 5.";
+      renderReportCard(el, forSession, report, preview, events);
+      placeReportCard(reportIsland);
     } catch (e) {
       if (seq !== reportSeq) return;
       el.textContent = `Report unavailable\nCould not fetch the report: ${(e as Error).message}. The raw events are in the server log; no report was invented.`;

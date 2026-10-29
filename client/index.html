@@ -42,6 +42,22 @@
       }
       #bar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       #tokens { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+      /* Instant hover card above the token: full task plus island,
+         state, stall. Same surface language as the quest log and
+         report card (surface, radius-lg, shared shadow, Bricolage
+         title). pointer-events none so it never blocks the token
+         or sticks around; no animation, so no motion preference
+         handling needed. */
+      #hovercard {
+        position: absolute; bottom: calc(100% + 8px); left: 8px; z-index: 30;
+        max-width: min(360px, 80vw); padding: 12px 14px;
+        background: var(--surface); color: var(--text);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 12px 32px rgba(8,24,28,.45);
+        pointer-events: none;
+      }
+      .hover-title { font: 800 14px "Bricolage Grotesque", sans-serif; }
+      .hover-meta { font: 600 12px "Overpass", system-ui, sans-serif; color: var(--text-muted); margin-top: 3px; }
       .token { flex: none; }
       .token {
         display: inline-flex; align-items: center; gap: 8px;
@@ -56,12 +72,18 @@
       .token:hover { transform: translateY(-2px); }
       .token.selected { border-color: var(--accent); background: linear-gradient(180deg, #2e4a42, #213a35); }
       .token .ship { width: 27px; height: 27px; object-fit: contain; flex: none; }
+      .token-text { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
       .token:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-      .dot { width: 9px; height: 9px; border-radius: var(--radius-full); background: var(--text-muted); flex: none; }
+      .dot { width: 12px; height: 12px; border-radius: var(--radius-full); background: var(--text-muted); flex: none; }
       .dot-working { background: var(--primary); animation: pulse 1.6s ease-in-out infinite; }
       .dot-paused { background: var(--warning); }
       .dot-finished { background: var(--success); }
       .dot-failed { background: var(--error); }
+      .dot-stopped { background: var(--text-muted); }
+      .dot-kept { background: var(--warning); }
+      .dot-accepted { background: var(--success); }
+      .dot-discarded { background: var(--text-muted); }
+      .dot-stalled { background: var(--warning); animation: pulse 1.6s ease-in-out infinite; }
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
       #new-quest, .primary-btn {
         min-height: 44px; padding: 8px 16px;
@@ -133,6 +155,29 @@
         position: fixed; z-index: 21; display: none; height: 2px;
         background: var(--accent); transform-origin: 0 50%; opacity: .8;
       }
+      /* Finish section on the report card (T6): preview lines,
+         plain-English results, and the test output tail. */
+      #report h3 { font: 800 14px "Bricolage Grotesque", sans-serif; margin: 0 0 6px; }
+      .report-test { margin-top: 8px; font-size: 13px; }
+      .report-test-pass { color: var(--success); }
+      .report-test-fail { color: #ffb4a3; }
+      .report-finish { border-top: 1px solid rgba(234,242,240,.14); margin-top: 10px; padding-top: 8px; }
+      .report-line { font-size: 13px; margin: 3px 0; }
+      .report-muted { color: var(--text-muted); }
+      .report-err { color: #ffb4a3; font-size: 13px; margin: 6px 0; white-space: pre-wrap; }
+      .report-ok { color: var(--success); font-size: 13px; margin: 6px 0; white-space: pre-wrap; }
+      .report-pre {
+        font: 400 11px "JetBrains Mono", monospace; white-space: pre-wrap;
+        background: var(--surface-raised); border-radius: var(--radius-sm);
+        padding: 8px; max-height: 140px; overflow-y: auto; margin: 6px 0;
+      }
+      #report input[type="text"] {
+        width: 100%; box-sizing: border-box; min-height: 44px; margin-top: 6px;
+        background: var(--surface-raised); color: var(--text);
+        border: 1px solid var(--text-muted); border-radius: var(--radius-sm);
+        padding: 8px 10px; font: 400 14px "Overpass", system-ui, sans-serif;
+      }
+      #report .ghost-btn, #report .primary-btn { min-height: 36px; padding: 4px 12px; }
 
       @media (prefers-reduced-motion: reduce) {
         #questlog, #report { animation: none; }
@@ -183,10 +228,12 @@
           <button id="act-archive" class="ghost-btn" type="button">Archive</button>
           <button id="act-report" class="ghost-btn" type="button">Report</button>
         </div>
-        <label for="follow-task">Follow-up</label>
-        <input id="follow-task" type="text" placeholder="Also check the invoice totals" />
-        <div class="action-row">
-          <button id="act-follow" class="ghost-btn" type="button">Send follow-up</button>
+        <div id="follow-row">
+          <label for="follow-task">Follow-up</label>
+          <input id="follow-task" type="text" placeholder="Also check the invoice totals" />
+          <div class="action-row">
+            <button id="act-follow" class="ghost-btn" type="button">Send follow-up</button>
+          </div>
         </div>
         <div id="msg-row">
           <label for="msg-task">Message the agent</label>
@@ -216,6 +263,7 @@
         <div id="controls"><button id="stop-report" class="primary-btn" type="button">Stop &amp; report</button></div>
       </div>
       <div id="status">Loading sprite sheets…</div>
+      <div id="hovercard" role="tooltip" style="display:none"></div>
     </footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
