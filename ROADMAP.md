@@ -59,7 +59,7 @@ Work:
 - Quests in plain English, with the target island and model chosen at creation.
 - Draft the 3-minute demo script now, so steps 5–8 build toward it.
 
-## 5. Finish flow and failure states — done (2026-10-29: PR #21 open, merge on owner pass)
+## 5. Finish flow and failure states — done (2026-10-29: PR #20 and PR #21 merged)
 
 - T6: guarded Accept (refuses a dirty main checkout, shows the target branch and test command, re-runs checks after merge), Discard, Keep for later. Done: base branch recorded at creation; `--no-ff` merge; rollback on failing checks; test discovery (package.json, justfile, Makefile); check outcome logged as a test_result event; follow-up extended to stopped/kept.
 - Stalled, crashed, failed-test and location-unknown states drawn on the map, with plain-English text. Done: 3-minute stall marker on token/detail/status; frozen scaffold on crash; red pennant + card line on failed checks; conflict send-back box on the card.
