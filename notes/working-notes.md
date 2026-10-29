@@ -82,12 +82,17 @@ Test stack (approved): cargo test (Rust), Vitest (client logic), Playwright (the
 - GestiKo counts moved: 600 files, 60 islands, 381 bridges since the parent-remainder split (PR #13). Older counts in the 2026-10-26 entries are history, not current numbers.
 - Command bar, quest log and report card are mocked. The owner approved variant A, "Harbor bar". T12 builds it. T5 (session lifecycle) is done (PR #15).
 
-## Updates (2026-10-28, ribbon bridges, unmerged)
+## Updates (2026-10-28, ribbon bridges, merged as PR #20)
 
 - Bent bridges are procedural ribbons now (branch feat/ribbon-bridges): deckRibbon builds mitered strips per leg (bevel past 120° deflection), each leg in its direction plank tile, posts stamp along the strip edges with sagging rope rails. This supersedes the corner-piece sprite task (PR #19 still open, unmerged).
 - Why not full bridge-a/b.png on the ribbon: both carry 20-30% transparent margins plus baked posts/ropes; full-sprite v maps transparency across miter seams. Fix: cropped pure-plank tiles (bridge-plank-a/b.png, A is B mirrored) plus a shaft-only post crop (bridge-post.png). Source crops documented in renderCity.ts; originals stay on disk.
 - All 5 GestiKo elbows render clean miters (deck-only + furniture shots in /tmp/corner: v76/v167/v171/v251/v272, gal171). Gates green: cargo 28+8+13+1+3, clippy, Vitest 96, tsc, Playwright 5. Taste-check owed to the owner before any merge; Step 5 starts only after that pass.
 - Opus review caught a P0: the strip triangle diagonal ran along the left edge, leaving a water hole along every right rail (visible only close up; full review in /tmp/corner/opus-review.txt). Fixed with the startR->endL diagonal plus a quad-coverage test, a butt fallback for short legs and 180° reversals, a Mesh geometry leak fix, rope sag 3px true, typed postRanges, deckEdges extracted pure with tests. Re-verified: hole centroid renders deck (holetest.png), all joints re-shot (w76/w167/w171/w251/w272, gal2, k171). Gates green: Vitest 106, rest unchanged. Rejected with reasons: u-restart per leg (breaks rail phase), depth sort and 180° texture flip (deferred, no visible defect), end posts on grass (intended bridgeheads).
+## Updates (2026-10-29)
+
+- Step 5 done (PR #21 open, merge on owner pass): guarded Accept (base branch recorded at creation, dirty/off-target/mid-merge refusals, uncommitted work committed on the quest branch first, `--no-ff` merge, post-merge checks with rollback), Discard, Keep, test discovery (package.json, justfile, Makefile), check outcome logged as test_result; stall/crash/failed-test/conflict states on map + card. QA ran live (10/10 contracts, 8/8 browser, 3 fixes with regressions); report /tmp/qa-step5/qa-report-step5.md.
+- Ribbon bridges (PR #20) and step 5 (PR #21) are independent branches off main; rebase the second after the first merges.
+- Still owed: cross-model review (Opus/Codex limited 2026-10-28, retry); live Claude pause/resume; adapter TestResult for agent-run tests.
 
 ## Open questions carried in the design doc
 
