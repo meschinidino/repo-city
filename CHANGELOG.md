@@ -10,7 +10,7 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 - deckRibbon: miter joins, bevel past 120° deflection, butt fallback for short legs and exact reversals. Opus review caught a triangle-coverage P0 (fixed, coverage test added).
 - Tests: Vitest 106, Playwright 5, all joints re-shot clean after the fix. Owner taste pass.
 ### Fixed — quest tokens (owner taste round, on `feat/step5-finish-flow`, not merged)
-- Bar tokens lead with the task text, then island and state ("taste: accept me · tests · stopped"); long tasks truncate with an ellipsis and the full task stays in the tooltip. No hover needed to tell quests apart. Token text is larger (15px, wider cap) with bigger state dots.
+- Bar tokens lead with the task text, then island and state ("Draft the release note · tests · stopped"); long tasks truncate with an ellipsis and the full task shows in an instant styled hover card, not the slow native tooltip. No hover needed to tell quests apart. Token text is larger (15px, wider cap) with bigger state dots.
 
 ### Added — T6 finish flow (step 5, on `feat/step5-finish-flow`, not merged)
 - Report card finish section, replacing the honest "Finish flow arrives in step 5" line. Accept merges on guards: the target is the branch checked out at quest creation (recorded then, shown on the card); a dirty, off-target, or mid-merge main checkout refuses in words; uncommitted quest work is committed on the quest branch first; the merge is explicit (`--no-ff`); the discovered test command re-runs after the merge and a failure rolls the merge back. Discard removes the worktree and branch after one explicit confirmation. Keep for later leaves the worktree untouched and releases the island.

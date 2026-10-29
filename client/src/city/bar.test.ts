@@ -2,7 +2,7 @@
 // owner's decisions (D-cap), so they carry unit tests.
 
 import { describe, expect, it } from "vitest";
-import { AGENT_CHOICES, actionsFor, agentLabel, capState, feedLines, stateText, tokenLabel } from "./bar";
+import { AGENT_CHOICES, actionsFor, agentLabel, capState, feedLines, hoverCard, stateText, tokenLabel } from "./bar";
 import type { SessionInfo } from "./live";
 
 const s = (state: string, task = "t", worktree: string | null = "/wt"): SessionInfo =>
@@ -29,11 +29,22 @@ describe("stateText and actionsFor", () => {
     expect(stateText("discarded")).toBe("discarded");
   });
   it("tokens lead with the task, then island and state", () => {
-    expect(tokenLabel("taste: accept me", "tests", "stopped", null)).toBe("taste: accept me · tests · stopped");
+    expect(tokenLabel("Draft the release note", "tests", "stopped", null)).toBe("Draft the release note · tests · stopped");
     expect(tokenLabel("x", "sales", "failed", null)).toBe("x · sales · crashed");
     expect(tokenLabel("x", "tests", "working", "no news for 5 min")).toBe("x · tests · working · no news for 5 min");
     expect(tokenLabel(null, "tests", "working", null)).toBe("untitled · tests · working");
     expect(tokenLabel("   ", "tests", "working", null)).toBe("untitled · tests · working");
+  });
+  it("hover cards carry the full task plus island, state, stall", () => {
+    expect(hoverCard("Draft the release note", "tests", "stopped", null)).toEqual({
+      title: "Draft the release note",
+      meta: "tests · stopped",
+    });
+    expect(hoverCard("x", "tests", "working", "no news for 5 min")).toEqual({
+      title: "x",
+      meta: "tests · working · no news for 5 min",
+    });
+    expect(hoverCard(null, "no island", "working", null)).toEqual({ title: "Untitled quest", meta: "no island · working" });
   });
   it("actions follow the state", () => {
     expect(actionsFor(s("working"))).toContain("pause");

@@ -33,10 +33,22 @@ export function countsTowardCap(s: SessionInfo): boolean {
 
 /** Token label: the task first (at-a-glance ID, no hover
  * needed), then the island and the state. Long tasks truncate
- * in CSS; the full task stays in the tooltip. */
+ * in CSS; the full task shows in the hover card. */
 export function tokenLabel(task: string | null, island: string, state: string, stall: string | null): string {
   const what = task?.trim() ? task.trim() : "untitled";
   return `${what} · ${island} · ${stateText(state)}${stall ? ` · ${stall}` : ""}`;
+}
+
+/** Hover card content: the full task plus island, state, stall.
+ * Instant and styled, unlike the slow native tooltip. */
+export function hoverCard(
+  task: string | null,
+  island: string,
+  state: string,
+  stall: string | null,
+): { title: string; meta: string } {
+  const title = task?.trim() ? task.trim() : "Untitled quest";
+  return { title, meta: `${island} · ${stateText(state)}${stall ? ` · ${stall}` : ""}` };
 }
 
 /** Plain words for a server state; unknown states pass through. */
@@ -185,6 +197,8 @@ export class HarborBar {
 
   constructor(deps: HarborDeps) {
     this.deps = deps;
+    // A scrolled row detaches the card from its token: drop it.
+    el("tokens").addEventListener("scroll", () => this.hideHover());
     el("new-quest").addEventListener("click", () => this.toggleLog());
     el("questlog-close").addEventListener("click", () => this.closeQuest());
     el("create-btn").addEventListener("click", () => void this.create());
@@ -271,6 +285,32 @@ export class HarborBar {
     this.deps.onSessionsChanged(this.sessions);
   }
 
+  /** Instant hover card above the token: the full task plus
+   * island, state, stall. No show delay, unlike the native
+   * tooltip it replaces. */
+  private showHover(anchor: HTMLElement, s: SessionInfo): void {
+    const card = el("hovercard");
+    const { title, meta } = hoverCard(s.task, this.islandName(s.island_id), s.state, stallText(s, Date.now()));
+    card.innerHTML = "";
+    const t = document.createElement("div");
+    t.className = "hover-title";
+    t.textContent = title;
+    const m = document.createElement("div");
+    m.className = "hover-meta";
+    m.textContent = meta;
+    card.append(t, m);
+    card.style.display = "block";
+    // The bar spans the full width, so viewport and bar
+    // coordinates align; clamp the card into the viewport.
+    const r = anchor.getBoundingClientRect();
+    const w = card.offsetWidth;
+    card.style.left = `${Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - w - 8))}px`;
+  }
+
+  private hideHover(): void {
+    el("hovercard").style.display = "none";
+  }
+
   private selected(): SessionInfo | null {
     return this.sessions.find((s) => s.id === this.selectedId) ?? null;
   }
@@ -282,6 +322,8 @@ export class HarborBar {
   }
 
   private render(): void {
+    // Tokens rebuild below: drop a card anchored to a dead node.
+    this.hideHover();
     const wrap = el("tokens");
     wrap.innerHTML = "";
     // Stable order (newest first): a quest never jumps along the
@@ -304,7 +346,9 @@ export class HarborBar {
       const dot = document.createElement("span");
       dot.className = stall ? "dot dot-stalled" : `dot dot-${s.state}`;
       b.append(sail, label, dot);
-      b.title = s.task ?? "";
+      b.setAttribute("aria-label", label.textContent ?? "");
+      b.addEventListener("mouseenter", () => this.showHover(b, s));
+      b.addEventListener("mouseleave", () => this.hideHover());
       b.addEventListener("click", () => {
         this.selectedId = s.id === this.selectedId ? null : s.id;
         this.deps.onFollow?.(this.selectedId ? s : null);
