@@ -180,3 +180,57 @@ async fn watcher_events_flow_over_http_and_websocket() {
     assert_eq!(stopped["type"], "session_finished");
     assert_eq!(stopped["outcome"], "stopped");
 }
+
+#[tokio::test]
+async fn drag_create_stores_source_and_refuses_self_and_islandless() {
+    let base = serve().await;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().to_string_lossy().to_string();
+    let client = reqwest::Client::new();
+    async fn create(
+        client: &reqwest::Client,
+        base: &str,
+        body: serde_json::Value,
+    ) -> (reqwest::StatusCode, serde_json::Value) {
+        let resp = client.post(format!("{base}/api/sessions")).json(&body).send().await.unwrap();
+        let status = resp.status();
+        let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    // A drag-connect quest records its source island.
+    let (status, v) = create(
+        &client,
+        &base,
+        serde_json::json!({
+            "repo_path": repo, "island_id": "web", "task": "connect web to api",
+            "spawn": false, "source_island_id": "api",
+        }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::CREATED);
+    assert_eq!(v["source_island_id"], "api");
+    let id = v["id"].as_str().unwrap().to_string();
+    let got: serde_json::Value = client
+        .get(format!("{base}/api/sessions/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(got["source_island_id"], "api");
+
+    // Same-island and island-less sources refuse in words.
+    let (status, v) = create(
+        &client,
+        &base,
+        serde_json::json!({"repo_path": repo, "island_id": "web", "source_island_id": "web"}),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+    assert!(v["error"].as_str().unwrap_or("").contains("itself"), "{v}");
+    let (status, v) = create(&client, &base, serde_json::json!({"repo_path": repo, "source_island_id": "api"})).await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+    assert!(v["error"].as_str().unwrap_or("").contains("target island"), "{v}");
+}

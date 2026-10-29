@@ -18,6 +18,10 @@ pub struct Session {
     pub worktree_path: Option<String>,
     /// Target district/island chosen at creation, if any.
     pub island_id: Option<String>,
+    /// Drag-connect source island (step 6): the quest makes
+    /// `island_id` use this island. None for ordinary quests and
+    /// pre-step-6 rows. The client draws the dashed lane from it.
+    pub source_island_id: Option<String>,
     pub task: Option<String>,
     /// working | paused | stopped | finished | failed | kept |
     /// accepted | discarded | archived
@@ -153,7 +157,7 @@ impl Store {
         // Any other error (locked DB, read-only file) must surface:
         // reads map `model`/`effort` from every row, so a missing
         // column would break every session query (Opus review).
-        for col in ["model", "effort", "agent", "pending_task", "base_branch"] {
+        for col in ["model", "effort", "agent", "pending_task", "base_branch", "source_island_id"] {
             if let Err(e) = conn.execute(&format!("ALTER TABLE sessions ADD COLUMN {col} TEXT"), []) {
                 if !e.to_string().contains("duplicate column name") {
                     return Err(e.to_string());
@@ -173,7 +177,7 @@ impl Store {
         island_id: Option<&str>,
         task: Option<&str>,
     ) -> Result<Session, String> {
-        self.create_session_chosen(repo_path, worktree_path, island_id, task, None, None, None, None)
+        self.create_session_chosen(repo_path, worktree_path, island_id, task, None, None, None, None, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -187,6 +191,7 @@ impl Store {
         effort: Option<&str>,
         agent: Option<&str>,
         base_branch: Option<&str>,
+        source_island_id: Option<&str>,
     ) -> Result<Session, String> {
         let now = crate::events::now_ms();
         let session = Session {
@@ -194,6 +199,7 @@ impl Store {
             repo_path: repo_path.to_string(),
             worktree_path: worktree_path.map(str::to_string),
             island_id: island_id.map(str::to_string),
+            source_island_id: source_island_id.map(str::to_string),
             // The task is free text from the user and can quote a
             // credential; it is stored only after redaction.
             task: task.map(|t| redact::redact_text(t, &self.secrets)),
@@ -210,9 +216,9 @@ impl Store {
         };
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO sessions (id, repo_path, worktree_path, island_id, task, state, cli_session_id, model, effort, agent, base_branch, created_ms, updated_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?11)",
-            params![session.id, session.repo_path, session.worktree_path, session.island_id, session.task, session.state, session.model, session.effort, session.agent, session.base_branch, now],
+            "INSERT INTO sessions (id, repo_path, worktree_path, island_id, task, state, cli_session_id, model, effort, agent, base_branch, source_island_id, created_ms, updated_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?12, ?11, ?11)",
+            params![session.id, session.repo_path, session.worktree_path, session.island_id, session.task, session.state, session.model, session.effort, session.agent, session.base_branch, now, session.source_island_id],
         )
         .map_err(|e| e.to_string())?;
         Ok(session)
@@ -229,6 +235,7 @@ impl Store {
             repo_path: row.get("repo_path")?,
             worktree_path: row.get("worktree_path")?,
             island_id: row.get("island_id")?,
+            source_island_id: row.get("source_island_id")?,
             task: row.get("task")?,
             state: row.get("state")?,
             base_branch: row.get("base_branch")?,
@@ -415,6 +422,7 @@ impl Store {
         effort: Option<&str>,
         agent: Option<&str>,
         base_branch: Option<&str>,
+        source_island_id: Option<&str>,
     ) -> Result<Session, CreateError> {
         let now = crate::events::now_ms();
         let id = uuid::Uuid::new_v4().to_string();
@@ -423,6 +431,7 @@ impl Store {
             id,
             repo_path: repo_path.to_string(),
             island_id: island_id.map(str::to_string),
+            source_island_id: source_island_id.map(str::to_string),
             task: task.map(|t| redact::redact_text(t, &self.secrets)),
             state: "working".to_string(),
             base_branch: base_branch.map(str::to_string),
@@ -467,9 +476,9 @@ impl Store {
             }
         }
         conn.execute(
-            "INSERT INTO sessions (id, repo_path, worktree_path, island_id, task, state, cli_session_id, model, effort, agent, base_branch, created_ms, updated_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'working', NULL, ?6, ?7, ?8, ?10, ?9, ?9)",
-            params![session.id, session.repo_path, session.worktree_path, session.island_id, session.task, session.model, session.effort, session.agent, now, session.base_branch],
+            "INSERT INTO sessions (id, repo_path, worktree_path, island_id, task, state, cli_session_id, model, effort, agent, base_branch, source_island_id, created_ms, updated_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'working', NULL, ?6, ?7, ?8, ?10, ?11, ?9, ?9)",
+            params![session.id, session.repo_path, session.worktree_path, session.island_id, session.task, session.model, session.effort, session.agent, now, session.base_branch, session.source_island_id],
         )
         .map_err(|e| CreateError::Other(e.to_string()))?;
         Ok(session)
@@ -719,7 +728,7 @@ mod tests {
     fn base_branch_roundtrips_and_last_event_ms_tracks_the_log() {
         let store = Store::in_memory().unwrap();
         let s = store
-            .create_session_chosen("/repo", Some("/wts/x"), Some("api"), Some("t"), None, None, Some("muse"), Some("main"))
+            .create_session_chosen("/repo", Some("/wts/x"), Some("api"), Some("t"), None, None, Some("muse"), Some("main"), None)
             .unwrap();
         assert_eq!(s.base_branch.as_deref(), Some("main"));
         assert_eq!(s.last_event_ms, None);
@@ -737,6 +746,21 @@ mod tests {
         let listed = store.list_sessions().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].last_event_ms, got.last_event_ms);
+    }
+
+    #[test]
+    fn source_island_roundtrips_and_defaults_to_none() {
+        let store = Store::in_memory().unwrap();
+        let s = store
+            .create_session_chosen("/repo", None, Some("web"), Some("t"), None, None, None, None, Some("api"))
+            .unwrap();
+        assert_eq!(s.source_island_id.as_deref(), Some("api"));
+        let got = store.get_session(&s.id).unwrap().unwrap();
+        assert_eq!(got.source_island_id.as_deref(), Some("api"));
+        let plain = store.create_session("/repo", None, Some("web"), Some("t")).unwrap();
+        assert_eq!(plain.source_island_id, None);
+        let got_plain = store.get_session(&plain.id).unwrap().unwrap();
+        assert_eq!(got_plain.source_island_id, None);
     }
 
     #[test]
@@ -793,22 +817,22 @@ mod tests {
     fn guarded_create_holds_lock_and_cap_at_insert() {
         let store = Store::in_memory().unwrap();
         let a = store
-            .create_session_guarded("/repo", Some("api"), Some("one"), Some("/wts"), None, None, None, None)
+            .create_session_guarded("/repo", Some("api"), Some("one"), Some("/wts"), None, None, None, None, None)
             .unwrap();
         assert!(a.worktree_path.as_deref().is_some_and(|p| p.ends_with(&a.id)));
         // Same island is locked at insert, not after a race window.
         assert!(matches!(
-            store.create_session_guarded("/repo", Some("api"), Some("two"), None, None, None, None, None),
+            store.create_session_guarded("/repo", Some("api"), Some("two"), None, None, None, None, None, None),
             Err(CreateError::IslandLocked { .. })
         ));
         store
-            .create_session_guarded("/repo", Some("web"), Some("two"), Some("/wts"), None, None, None, None)
+            .create_session_guarded("/repo", Some("web"), Some("two"), Some("/wts"), None, None, None, None, None)
             .unwrap();
         store
-            .create_session_guarded("/repo", Some("db"), Some("three"), Some("/wts"), None, None, None, None)
+            .create_session_guarded("/repo", Some("db"), Some("three"), Some("/wts"), None, None, None, None, None)
             .unwrap();
         // Three spawned quests run: the fourth is refused by name.
-        match store.create_session_guarded("/repo", None, Some("four"), Some("/wts"), None, None, None, None) {
+        match store.create_session_guarded("/repo", None, Some("four"), Some("/wts"), None, None, None, None, None) {
             Err(CreateError::CapReached(names)) => {
                 assert!(names.contains("one") && names.contains("three"), "{names}")
             }
@@ -816,7 +840,7 @@ mod tests {
         }
         // Watcher-only sessions do not count and are not refused.
         assert!(store
-            .create_session_guarded("/repo", None, Some("watch"), None, None, None, None, None)
+            .create_session_guarded("/repo", None, Some("watch"), None, None, None, None, None, None)
             .is_ok());
     }
 
@@ -824,7 +848,7 @@ mod tests {
     fn model_and_effort_are_stored_and_returned() {
         let store = Store::in_memory().unwrap();
         let s = store
-            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), Some("opus"), Some("high"), None, None)
+            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), Some("opus"), Some("high"), None, None, None)
             .unwrap();
         assert_eq!(s.model.as_deref(), Some("opus"));
         assert_eq!(s.effort.as_deref(), Some("high"));
@@ -832,7 +856,7 @@ mod tests {
         assert_eq!(back.model.as_deref(), Some("opus"));
         assert_eq!(back.effort.as_deref(), Some("high"));
         let plain = store
-            .create_session_guarded("/repo", Some("web"), Some("t"), None, None, None, None, None)
+            .create_session_guarded("/repo", Some("web"), Some("t"), None, None, None, None, None, None)
             .unwrap();
         assert!(plain.model.is_none() && plain.effort.is_none());
     }
@@ -841,7 +865,7 @@ mod tests {
     fn pending_task_queues_and_clears() {
         let store = Store::in_memory().unwrap();
         let s = store
-            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), None, None, Some("muse"), None)
+            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), None, None, Some("muse"), None, None)
             .unwrap();
         assert!(s.pending_task.is_none());
         store.set_pending_task(&s.id, Some("also check totals")).unwrap();
@@ -855,7 +879,7 @@ mod tests {
     fn clear_pending_task_if_keeps_a_newer_message() {
         let store = Store::in_memory().unwrap();
         let s = store
-            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), None, None, Some("muse"), None)
+            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), None, None, Some("muse"), None, None)
             .unwrap();
         store.set_pending_task(&s.id, Some("first")).unwrap();
         store.set_pending_task(&s.id, Some("second")).unwrap();
@@ -873,14 +897,14 @@ mod tests {
     fn agent_is_stored_and_returned() {
         let store = Store::in_memory().unwrap();
         let s = store
-            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), Some("muse-spark-1.3"), Some("ultra"), Some("muse"), None)
+            .create_session_guarded("/repo", Some("api"), Some("t"), Some("/wts"), Some("muse-spark-1.3"), Some("ultra"), Some("muse"), None, None)
             .unwrap();
         assert_eq!(s.agent.as_deref(), Some("muse"));
         let back = store.get_session(&s.id).unwrap().unwrap();
         assert_eq!(back.agent.as_deref(), Some("muse"));
         assert_eq!(back.model.as_deref(), Some("muse-spark-1.3"));
         let watch = store
-            .create_session_guarded("/repo", Some("web"), Some("t"), None, None, None, None, None)
+            .create_session_guarded("/repo", Some("web"), Some("t"), None, None, None, None, None, None)
             .unwrap();
         assert!(watch.agent.is_none());
     }
@@ -892,14 +916,14 @@ mod tests {
         for island in ["a", "b", "c"] {
             ids.push(
                 store
-                    .create_session_guarded("/repo", Some(island), Some(island), Some("/wts"), None, None, None, None)
+                    .create_session_guarded("/repo", Some(island), Some(island), Some("/wts"), None, None, None, None, None)
                     .unwrap()
                     .id,
             );
         }
         store.transition_state(&ids[2], &["working"], "paused").unwrap();
         let d = store
-            .create_session_guarded("/repo", Some("d"), Some("d-task"), Some("/wts"), None, None, None, None)
+            .create_session_guarded("/repo", Some("d"), Some("d-task"), Some("/wts"), None, None, None, None, None)
             .unwrap();
         store.transition_state(&d.id, &["working"], "paused").unwrap();
         // Resume c: 3 run again. Resume d: the cap refuses the move.

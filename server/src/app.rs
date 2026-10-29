@@ -356,6 +356,11 @@ struct CreateSession {
     /// Which agent CLI runs the quest: `claude` (default) or
     /// `muse`. Always validated; stored only when `spawn` is set.
     agent: Option<String>,
+    /// Drag-connect source island (step 6): the quest makes
+    /// `island_id` use this island. Same-island and island-less
+    /// sources refuse below; the client also refuses duplicates
+    /// and import cycles, which need the extraction graph.
+    source_island_id: Option<String>,
 }
 
 /// True when the agent CLI binary is on this server's PATH.
@@ -468,6 +473,22 @@ async fn create_session(
         )
         .into_response();
     }
+    if let Some(source) = body.source_island_id.as_deref() {
+        match body.island_id.as_deref() {
+            None => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    "a drag-connect quest needs a target island next to its source island".to_string(),
+                )
+                .into_response()
+            }
+            Some(target) if target == source => {
+                return err(StatusCode::BAD_REQUEST, "a quest cannot connect an island to itself".to_string())
+                    .into_response()
+            }
+            Some(_) => {}
+        }
+    }
     // Watch-only sessions have no agent: store no agent, model,
     // or effort, whatever the caller sent (the client already
     // drops them).
@@ -493,6 +514,7 @@ async fn create_session(
         effort.as_deref(),
         agent.as_deref(),
         base_branch.as_deref(),
+        body.source_island_id.as_deref(),
     ) {
         Ok(s) => s,
         Err(e @ crate::store::CreateError::IslandLocked { .. })
@@ -2202,11 +2224,11 @@ mod pending_message_tests {
         let store = Arc::new(Store::in_memory().unwrap());
         let state = test_state(store.clone());
         let holder = store
-            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None)
+            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None, None)
             .unwrap();
         assert_eq!(holder.state, "working");
         let waiter = store
-            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None)
+            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None, None)
             .unwrap();
         store.set_state(&waiter.id, "finished").unwrap();
         store.set_pending_task(&waiter.id, Some("go on")).unwrap();
@@ -2240,10 +2262,10 @@ mod pending_message_tests {
         let store = Arc::new(Store::in_memory().unwrap());
         let state = test_state(store.clone());
         store
-            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None)
+            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None, None)
             .unwrap();
         let waiter = store
-            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None)
+            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None, None)
             .unwrap();
         store.set_state(&waiter.id, "finished").unwrap();
         store.set_pending_task(&waiter.id, Some("go on")).unwrap();
