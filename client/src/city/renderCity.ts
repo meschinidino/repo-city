@@ -1,6 +1,7 @@
 import { Application, Assets, Container, Graphics, Sprite, Text, Texture, TilingSprite } from "pixi.js";
 import bridgeAUrl from "../../../assets/sprites/bridge-a.png";
 import bridgeBUrl from "../../../assets/sprites/bridge-b.png";
+import bridgeCornerUrl from "../../../assets/sprites/bridge-corner.png";
 import glow0Url from "../../../assets/sprites/glow-0.png";
 import glow1Url from "../../../assets/sprites/glow-1.png";
 import glow2Url from "../../../assets/sprites/glow-2.png";
@@ -8,7 +9,7 @@ import type { World } from "../map/pipeline";
 import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
-import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, hashSeed, PLOT, plotDepth, waterSegments, type CityLayout } from "./layoutCity";
+import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, CORNER_ANCHOR, CORNER_TILE_H, cornerDecision, cornerTargetH, hashSeed, PLOT, plotDepth, waterSegments, type CityLayout } from "./layoutCity";
 import type { SessionView } from "../events/reduce";
 
 const BUILDING_SPRITE: Record<string, string> = {
@@ -41,6 +42,7 @@ export class CityView {
   private bridgeSprites = new Container();
   private bridgeTexA: Texture | null = null;
   private bridgeTexB: Texture | null = null;
+  private bridgeTexCorner: Texture | null = null;
   private glowLayer = new Container();
   private glowTexs: Texture[] = [];
   private glowSprites: { spr: Sprite; points: { gx: number; gy: number }[]; cum: number[]; phase: number }[] = [];
@@ -58,6 +60,7 @@ export class CityView {
     segs: [{ gx: number; gy: number }, { gx: number; gy: number }][];
     clear: boolean;
     dirs: { gx: number; gy: number }[][];
+    corner: { gx: number; gy: number; mirror: boolean } | null;
   }[] = [];
 
   constructor(world: World, layout: CityLayout) {
@@ -173,11 +176,24 @@ export class CityView {
         // direction. A projected width made some decks thin.
         // Only water segments draw: no deck runs through an
         // island that sits between the pair.
-        const targetH = Math.min(62, 44 + 3 * Math.log2(pair.count + 1));
+        const targetH = cornerTargetH(pair.count);
         for (const [p, q] of pair.segs) {
           const [px, py] = proj.project(p.gx, p.gy);
           const [qx, qy] = proj.project(q.gx, q.gy);
           this.addDeck(px, py, qx, qy, targetH, 1);
+        }
+        // Sharp joints turn on the corner piece, drawn after (over)
+        // the shortened legs. Same scale convention as the tiles.
+        if (pair.corner && this.bridgeTexCorner) {
+          const [ex, ey] = proj.project(pair.corner.gx, pair.corner.gy);
+          const s = targetH / CORNER_TILE_H;
+          const cs = new Sprite(this.bridgeTexCorner);
+          cs.anchor.set(CORNER_ANCHOR.x, CORNER_ANCHOR.y);
+          cs.width = this.bridgeTexCorner.width * s;
+          cs.height = this.bridgeTexCorner.height * s;
+          if (pair.corner.mirror) cs.scale.x *= -1;
+          cs.position.set(ex, ey);
+          this.bridgeSprites.addChild(cs);
         }
       } else if (strong) {
         const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
@@ -483,6 +499,14 @@ export class CityView {
     }
     root.addChild(shore);
 
+    // Bridge tiles load before the pair build: bent pairs shorten
+    // their legs only when the sprite mode (tiles + corner) is fully
+    // present. Without the art the pairs keep full legs, so a missing
+    // texture never leaves a gap at a joint.
+    this.bridgeTexA = (await Assets.load(bridgeAUrl).catch(() => null)) as Texture | null;
+    this.bridgeTexB = (await Assets.load(bridgeBUrl).catch(() => null)) as Texture | null;
+    this.bridgeTexCorner = (await Assets.load(bridgeCornerUrl).catch(() => null)) as Texture | null;
+    this.glowTexs = ((await Promise.all([glow0Url, glow1Url, glow2Url].map((u) => Assets.load(u).catch(() => null)))).filter(Boolean) as Texture[]);
     // Bridge data: one entry per unordered island pair, with one
     // oriented span per import direction for the pulses.
     const byId = new Map(this.layout.islands.map((i) => [i.id, i]));
@@ -554,12 +578,25 @@ export class CityView {
         const deckPoints = shorePoints.length === 2
           ? [out(shorePoints[0], shorePoints[1]), out(shorePoints[1], shorePoints[0])]
           : [out(shorePoints[0], shorePoints[1]), shorePoints[1], out(shorePoints[2], shorePoints[1])];
+        // Sharp bent joints turn on the corner piece: the legs shorten
+        // so their ragged tiling cuts hide under its arms. Wide joints,
+        // short legs, land in the joint disk, and missing art keep full
+        // straight tiles (cornerDecision returns no corner).
+        const spriteMode = (this.bridgeTexA || this.bridgeTexB) && this.bridgeTexCorner;
+        const decision = cornerDecision(
+          deckPoints,
+          pair.count,
+          (gx, gy) => proj.project(gx, gy),
+          TW,
+          { art: Boolean(spriteMode), isLand: cityLand },
+        );
         this.bridgePairs.push({
           count: pair.count,
           span,
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
-          segs: waterSegments(deckPoints, (gx, gy) => landSet.has(gx + "," + gy)),
+          segs: decision.legs.flatMap((leg) => waterSegments(leg, cityLand)),
+          corner: decision.corner,
           // A bridge is a neighbour link (owner: we were stuck
           // patching symptoms). Deck path capped at 16 cells:
           // on GestiKo the true neighbour bridges are 2-13 cells;
@@ -571,9 +608,6 @@ export class CityView {
         });
       }
     }
-    this.bridgeTexA = (await Assets.load(bridgeAUrl).catch(() => null)) as Texture | null;
-    this.bridgeTexB = (await Assets.load(bridgeBUrl).catch(() => null)) as Texture | null;
-    this.glowTexs = ((await Promise.all([glow0Url, glow1Url, glow2Url].map((u) => Assets.load(u).catch(() => null)))).filter(Boolean) as Texture[]);
     this.bridgeGfx = new Graphics();
     root.addChild(this.bridgeSprites);
     root.addChild(this.bridgeGfx);

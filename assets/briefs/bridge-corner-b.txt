@@ -1,0 +1,40 @@
+Bridge corner piece, short arms — Repo City sprite pipeline brief
+(second brief; the first asked for 1.2-width arms but both runs drew
+long arms with mid posts that cannot trim without dangling rails)
+
+Goal: a SMALL corner deck piece that joins two straight bridge decks
+at a sharp bend. The piece owns only the joint: short arms, one post.
+
+References attached: the straight deck tile
+(assets/sprites/bridge-a.png) for wood, posts and rope style, and a
+close-up screenshot of a bent bridge today showing the fault
+(crossing planks, doubled posts, a water gap at the outer edge).
+
+Match the reference art: stylized low-poly game art, warm soft light
+from the upper left, matte wood, warm brown planks with visible seams
+and nail dots, square posts, rope rails.
+
+Make: ONE SMALL corner piece in screen space, a V (chevron) band
+opening to the RIGHT (east), EXACTLY mirror-symmetric top to bottom.
+The outer vertex points LEFT; the top arm runs up-right at 26 degrees
+above horizontal; the bottom arm mirrors it (interior angle 53
+degrees). Deck band width matches the reference tile's deck width at
+the same scale. Each arm is SHORT: exactly 4 rung planks long from the
+vertex (about 1.2 deck-widths), ending in a clean straight cut across
+the arm.
+
+Construction: SHORT planks run ACROSS each arm like rungs of a ladder
+(perpendicular to the arm axis, exactly like the reference tile),
+fanning around the vertex with no gaps; two nail dots per plank.
+Exactly ONE post in the whole piece: a stout square corner post at the
+outer vertex point. NO other posts anywhere. One rope rail runs from
+the vertex post along the OUTER edge of each arm and ENDS at the arm
+cut (a clean cut rope end is correct: the straight decks continue the
+rail). The inner edges carry matching rails from a small inner post
+just back from the inner point, also ending at the cuts. No water, no
+ground, no shadow outside the piece, no text, no people.
+
+Background: solid magenta #FF00FF everywhere outside the piece,
+including the V opening between the arms. The WHOLE piece sits inside
+the frame with magenta margin on all four sides; nothing touches the
+frame edges. One corner piece only, filling most of the frame.

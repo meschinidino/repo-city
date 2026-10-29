@@ -1,0 +1,37 @@
+Bridge corner piece — Repo City sprite pipeline brief
+
+Goal: a corner deck piece that joins two straight bridge decks at a
+sharp bend, so bent bridges turn on one clean corner instead of two
+overlapping straight tiles (today the joint shows crossing planks,
+doubled posts and a water gap at the outer edge).
+
+References attached: the straight deck tile
+(assets/sprites/bridge-a.png) for wood, posts and rope style, and a
+close-up screenshot of a bent bridge today showing the fault.
+
+Match the reference art: stylized low-poly game art, warm soft light
+from the upper left, matte wood, warm brown planks with visible seams
+and nail dots, square posts, rope rails.
+
+Make: ONE corner piece in screen space, a V (chevron) band opening to
+the RIGHT (east). The outer vertex points LEFT; one arm runs up-right
+at about 26 degrees above horizontal, the other runs down-right
+mirrored. Interior angle at the vertex about 53 degrees. Deck band
+width matches the reference tile's deck width at the same scale. Each
+arm is about 1.2 deck-widths long from the vertex and ends in a clean
+straight plank cut across the arm (no posts at the cut ends: the
+straight decks supply those).
+
+Construction: planks run across each arm (perpendicular to the arm
+axis) and fan around the vertex, with no gaps. A stout square corner
+post stands at the outer vertex point, with rope rails running from it
+along the outer edge of each arm to the cut ends. The inner edges
+carry matching rails meeting at a small inner post just back from the
+inner point. No water, no ground, no shadow outside the piece, no
+text, no people.
+
+Background: solid magenta #FF00FF everywhere outside the piece,
+including the V opening between the arms. Full posts and rails inside
+the frame; nothing cropped at the frame edges except the two arm ends.
+One corner piece only, vertex near left-center, arms reaching the
+right edge top and bottom, filling most of the frame.

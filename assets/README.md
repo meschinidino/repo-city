@@ -11,4 +11,6 @@ Generated art for the map and the briefs that made it. The rules for making and 
 
 `briefs/concept-overview.txt` and `briefs/concept-closeup.txt` produced the approved concept art in [docs/design/concepts/](../docs/design/concepts/).
 
+Bridge tiles (not sheets): `bridge-a.png` / `bridge-b.png` are the two straight-deck directions (levelled post-to-post units, cropped at 88% height), `bridge-corner.png` is the sharp-joint miter (E opening; the renderer mirrors it for W) composited from the straight tiles at ±atan(0.5) — see the CHANGELOG for the 8 failed generations behind it. `glow-0..2.png` are the direction-pulse frames. Corner briefs: `briefs/bridge-corner.txt` (v1), `briefs/bridge-corner-b.txt` (v2).
+
 All sheets were made with Codex image generation (`codex exec -i <reference.png> ... - < brief.txt`) on 2026-10-26. Every sheet is on flat magenta `#FF00FF`; buildings, trees and props stand on flat cyan `#00FFFF` footprint plates. Both colors are keyed out at load.
