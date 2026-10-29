@@ -4,6 +4,12 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ## [Unreleased]
 
+### Added — procedural ribbon bridges (on `feat/ribbon-bridges`, not merged)
+- Bent bridges are mitered ribbons now: one strip per leg bends at any angle, each leg in its direction plank tile, posts stamp along the rails with sagging rope rails. This supersedes the corner-piece sprite (PR #19).
+- New art is cropped from the approved bridge sprites (pure-plank tiles plus a shaft-only post); full sprites sliced transparency across miter seams.
+- deckRibbon: miter joins, bevel past 120° deflection, butt fallback for short legs and exact reversals. Opus review caught a triangle-coverage P0 (fixed, coverage test added).
+- Tests: Vitest 106, Playwright 5, all joints re-shot clean after the fix. Owner taste pass.
+
 ### Merged — PR #18 accepted by the owner (2026-10-28)
 - Step 4 (T12 Harbor bar and its owner rounds) passed owner judgement and merged. One Opus review pass over the last two rounds is still owed; both reviewers were at their usage limits.
 - Owner todo: a sprite for bridge corners, so bent bridges turn on a corner piece instead of two straight tiles.
