@@ -86,6 +86,19 @@ describe("validateDrop", () => {
       reason: "That would close an import cycle: sales → checkout → sales.",
     });
   });
+  it("names a multi-hop loop in full", () => {
+    // a -> b -> c: dragging a -> c wants c -> a, closing a
+    // two-hop loop. The e2e toast truncates this text, so the
+    // full wording is pinned here instead.
+    const chain = [
+      { from: "a", to: "b" },
+      { from: "b", to: "c" },
+    ];
+    expect(validateDrop("a", "c", chain, [], nameOf)).toEqual({
+      ok: false,
+      reason: "That would close an import cycle: auth → sales → checkout → auth.",
+    });
+  });
   it("accepts a fresh connection", () => {
     expect(validateDrop("a", "b", edges, [], nameOf)).toEqual({ ok: true });
   });

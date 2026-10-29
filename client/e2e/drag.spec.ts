@@ -143,14 +143,15 @@ test("drag journey: refusals, confirm, cancel, seeded lane", async ({ page }) =>
   await expect(page.locator("#toast")).toContainText(`${names[WEB]} already uses ${names[SHARED]}.`);
   expect((await laneDebug(page)).confirming).toBe(false);
 
-  // Multi-hop cycle: cli -> api would close
-  // api -> shared -> cli. (The toast truncates the loop, so
-  // only its head is asserted here; the full loop text is
-  // covered by the lane unit tests.)
-  await drag(page, CLI, API);
+  // True multi-hop cycle: web -> cli would close
+  // web -> shared -> cli -> web (two hops, no direct edge).
+  // (The toast truncates the loop, so only its head is
+  // asserted here; the full loop text is covered by the lane
+  // unit tests.)
+  await drag(page, WEB, CLI);
   const toast = page.locator("#toast");
   await expect(toast).toContainText("That would close an import cycle:");
-  await expect(toast).toContainText(names[CLI]);
+  await expect(toast).toContainText(names[WEB]);
   expect((await laneDebug(page)).confirming).toBe(false);
 
   // Valid drop: the quest form opens as the confirm card with
@@ -162,14 +163,29 @@ test("drag journey: refusals, confirm, cancel, seeded lane", async ({ page }) =>
   );
   await expect(page.locator("#island-select")).toHaveValue(WEB);
   expect((await laneDebug(page)).confirming).toBe(true);
-  await page.locator("#quest-task").fill("Hook web up to cli");
 
-  // A drag quest without an agent does no work: watch refuses
-  // at create, on the card, in words. (The agent select
-  // defaults to Claude, which would spawn a live run here.)
+  // The New-quest toggle also cancels a confirm: reviewing
+  // Claude caught a stale drag source riding along on the next
+  // create when the log closed this way instead of by Close.
+  await page.locator("#new-quest").click();
+  await expect(page.locator("#questlog")).toBeHidden();
+  expect((await laneDebug(page)).confirming).toBe(false);
+
+  // Re-drop, edit the task, and watch refuses at create: a
+  // drag quest without an agent does no work. (The agent
+  // select defaults to Claude, which would spawn a live run.)
+  await drag(page, CLI, WEB);
+  await page.locator("#quest-task").fill("Hook web up to cli");
   await page.locator("#agent-select").selectOption("watch");
   await page.locator("#create-btn").click();
   await expect(page.locator("#detail-error")).toContainText("needs an agent");
+
+  // Clearing the target mid-confirm refuses in words: an
+  // empty target matches no edge and no path, so the drop
+  // validator would wave it through to a generic server 400.
+  await page.locator("#island-select").selectOption("");
+  await page.locator("#create-btn").click();
+  await expect(page.locator("#detail-error")).toContainText("needs both ends");
 
   // Escape cancels the confirm: no quest, no lane, log shut.
   // Only the bootstrapped token remains.

@@ -473,6 +473,11 @@ async fn create_session(
         )
         .into_response();
     }
+    // The server validates the drag shape (both ends, not the
+    // same island); the "a drag quest needs an agent" rule lives
+    // in the client on purpose. API callers may stage a drag
+    // quest before its agent run exists, and the lane it draws
+    // stays honest: the wanted import does not exist yet.
     if let Some(source) = body.source_island_id.as_deref() {
         match body.island_id.as_deref() {
             None => {

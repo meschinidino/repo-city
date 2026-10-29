@@ -271,10 +271,6 @@ export class HarborBar {
   closeQuest(): void {
     el<HTMLSelectElement>("island-select").value = "";
     this.toggleLog(false);
-    if (this.pendingDragSource) {
-      this.pendingDragSource = null;
-      this.deps.onDragChange?.(null);
-    }
   }
 
   /** Drag-connect source island under confirmation, if any. Main
@@ -340,7 +336,17 @@ export class HarborBar {
   private toggleLog(force?: boolean): void {
     this.logOpen = force ?? !this.logOpen;
     el("questlog").style.display = this.logOpen ? "block" : "none";
-    if (this.logOpen) this.renderLog();
+    if (this.logOpen) {
+      this.renderLog();
+      return;
+    }
+    // Any close cancels a drag confirm, not only the Close
+    // button: the New-quest toggle also lands here, and a stale
+    // source would ride along on the next ordinary create.
+    if (this.pendingDragSource) {
+      this.pendingDragSource = null;
+      this.deps.onDragChange?.(null);
+    }
   }
 
   private render(): void {
@@ -514,6 +520,15 @@ export class HarborBar {
     // on it since the drop. A lane without an agent does no work.
     const dragSource = this.pendingDragSource;
     if (dragSource) {
+      // "No island" is legal for ordinary quests but not for a
+      // lane: validateDrop would wave an empty target through
+      // (it matches no edge and no path), so refuse it here in
+      // words instead of eating the server's generic 400.
+      if (!islandId) {
+        this.showError("Pick a target island for this connection: a lane needs both ends.");
+        this.toggleLog(true);
+        return;
+      }
       if (!spawn) {
         this.showError("A drag-connect quest needs an agent to do the work: pick Muse or Claude, not watch.");
         this.toggleLog(true);
