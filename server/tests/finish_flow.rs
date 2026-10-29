@@ -78,6 +78,7 @@ fn seed_quest(store: &Store, repo: &Path, wt_root: &Path, island: Option<&str>) 
             None,
             Some("claude"),
             Some(&base),
+            None,
         )
         .unwrap();
     let wt = worktree::create_worktree(repo, wt_root, &s.id).unwrap();
@@ -252,7 +253,7 @@ async fn accept_refuses_running_watcher_only_dirty_and_wrong_branch() {
 
     // A watcher-only quest has no worktree to merge.
     let w = store
-        .create_session_chosen(&repo_str, None, Some("web"), Some("watch"), None, None, None, None)
+        .create_session_chosen(&repo_str, None, Some("web"), Some("watch"), None, None, None, None, None)
         .unwrap();
     let (status, _) = act(&base, &w.id, "stop").await;
     assert_eq!(status, reqwest::StatusCode::OK);
