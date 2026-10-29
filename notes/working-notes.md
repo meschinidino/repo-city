@@ -101,6 +101,14 @@ Test stack (approved): cargo test (Rust), Vitest (client logic), Playwright (the
 - Known limits: killpg id can theoretically recycle under extreme churn (documented in code); orphan pid test assumes PID 1 reaps (macOS launchd; no Linux CI); 5-min check timeout path code-reviewed, never executed live; muse runs use --approval-mode never (T8 must tighten).
 - Step 5 needs the owner now: taste-check the finish UI + merge PR #21 (after PR #20 merges, rebase). Then step 6 drag-connect.
 
+## Updates (2026-10-29, step 6 drag-connect — lanes + born bridges)
+
+- PR #20 (ribbons) and PR #21 (step 5) merged to main (a3baa05); step-5 branch rebased before merge. Owner is taste-checking finish UI on :8788 (taste) + :5173.
+- Step 6 on `feat/step6-drag-connect`: server `source_island_id` (nullable, migrates old DBs; refuses same-island + island-less source at create); pure `lane.ts` (task text, drop validation, cycle path, dashes, reconcile fns); lane layer + island drag input + editable confirm flow (Escape/Close/water cancels; create re-validates, needs an agent, stores source).
+- Reconcile: `pendingLanes` (open drag quests without the import draw; terminal/satisfied drop out); `bornBridges` (accepted drag quests whose REAL import exists draw a deck + glow despite weak counts — an accepted quest without the import draws nothing). renderCity: pair keys, born set with change-gated rebuild (drawBridges frees GPU buffers), glow build extracted for rebuild. Glows pulse at island zoom only (existing D-zoom rule).
+- Verified live (GestiKo, taste server): lane draws for open drag quest; lane drops (1→0) when a real staged import lands (reverted after); accepted + import → born deck +1 sprite/+1 glow, planks + posts + pulse visible at island zoom (/tmp/born-island.png). Accepted state staged via sqlite (accept route needs a worktree run; guards covered by finish_flow tests). Probes archived after via API; GestiKo clean.
+- Left: e2e drag journey, full gates, /qa (cancel/edit/confirm/cycle), push + PR. Tests now: Vitest 137, tsc clean, Playwright 6/6.
+
 ## Open questions carried in the design doc
 
 - Exact Meta AI tooling requirement (gate 1 answers this).

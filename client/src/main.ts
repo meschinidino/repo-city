@@ -9,7 +9,7 @@ import { acceptSession, connectEvents, createSession, fetchAcceptPreview, fetchE
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
 import { HarborBar, stateText } from "./city/bar";
 import { cleanupWarningLine, escHtml, isFinishable, lastFinishNote, lastTestResult, stallText, testLine } from "./city/finish";
-import { dragTaskText, hasEdge, validateDrop } from "./city/lane";
+import { bornBridges, dragTaskText, pendingLanes, validateDrop } from "./city/lane";
 import type { SessionInfo as BarSession } from "./city/live";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -126,18 +126,8 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   // exist yet. Terminal quests drop out; a lane becomes a bridge
   // only once the extraction carries the real import.
   const reconcileLanes = () => {
-    const terminal = new Set(["accepted", "discarded", "archived"]);
-    city.setLanes(
-      knownSessions
-        .filter(
-          (s) =>
-            s.source_island_id &&
-            s.island_id &&
-            !terminal.has(s.state) &&
-            !hasEdge(layout.bridges, s.island_id, s.source_island_id),
-        )
-        .map((s) => ({ source: s.source_island_id!, target: s.island_id! })),
-    );
+    city.setLanes(pendingLanes(knownSessions, layout.bridges));
+    city.setBornBridges(bornBridges(knownSessions, layout.bridges));
   };
   const bar = new HarborBar({
     server,

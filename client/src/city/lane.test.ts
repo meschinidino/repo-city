@@ -2,11 +2,50 @@
 // dash geometry. Pure functions behind the lane interaction.
 
 import { describe, expect, it } from "vitest";
-import { dashSegments, dragTaskText, findPath, hasEdge, validateDrop } from "./lane";
+import { bornBridges, dashSegments, dragTaskText, findPath, hasEdge, pendingLanes, validateDrop } from "./lane";
 import type { SessionInfo } from "./live";
 
 const s = (island: string | null, state: string): SessionInfo =>
   ({ id: "s", repo_path: "/r", worktree_path: null, island_id: island, source_island_id: null, task: "t", state, base_branch: null, last_event_ms: null, cli_session_id: null, model: null, effort: null, agent: null, pending_task: null, created_ms: 0, updated_ms: 0 });
+
+const sd = (island: string, source: string, state: string): SessionInfo =>
+  ({ ...s(island, state), source_island_id: source });
+
+describe("pendingLanes", () => {
+  const edges = [{ from: "a", to: "b" }];
+  it("keeps an open drag quest without the import", () => {
+    expect(pendingLanes([sd("a", "c", "working")], edges)).toEqual([
+      { source: "c", target: "a" },
+    ]);
+  });
+  it("drops a satisfied quest (import island->source exists)", () => {
+    expect(pendingLanes([sd("a", "b", "working")], edges)).toEqual([]);
+  });
+  it("drops terminal quests", () => {
+    const sessions = ["accepted", "discarded", "archived"].map((state) =>
+      sd("a", "c", state),
+    );
+    expect(pendingLanes(sessions, edges)).toEqual([]);
+  });
+  it("skips quests without a drag source", () => {
+    expect(pendingLanes([s("a", "working")], edges)).toEqual([]);
+  });
+});
+
+describe("bornBridges", () => {
+  const edges = [{ from: "a", to: "b" }];
+  it("borns an accepted drag quest whose import exists", () => {
+    expect(bornBridges([sd("a", "b", "accepted")], edges)).toEqual(
+      new Set(["a|b"]),
+    );
+  });
+  it("draws nothing when the import is missing", () => {
+    expect(bornBridges([sd("a", "c", "accepted")], edges)).toEqual(new Set());
+  });
+  it("ignores non-accepted quests even with the import", () => {
+    expect(bornBridges([sd("a", "b", "working")], edges)).toEqual(new Set());
+  });
+});
 
 const names = new Map([["a", "auth"], ["b", "sales"], ["c", "checkout"]]);
 const nameOf = (id: string) => names.get(id) ?? id;

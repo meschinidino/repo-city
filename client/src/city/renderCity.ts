@@ -60,6 +60,11 @@ export class CityView {
   private glowLayer = new Container();
   private glowTexs: Texture[] = [];
   private glowSprites: { spr: Sprite; points: { gx: number; gy: number }[]; cum: number[]; phase: number }[] = [];
+  /** Lane-born pairs ("a|b" sorted keys): accepted drag quests
+   * whose real import exists. Draw decks + glows despite weak
+   * counts. Rebuilt only when the set changes (drawBridges
+   * frees GPU buffers on every run). */
+  private born = new Set<string>();
   private landCells = new Set<string>();
   private ring = new Graphics();
   private ringIsland: string | null = null;
@@ -78,6 +83,7 @@ export class CityView {
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
     count: number;
+    key: string;
     span: [{ gx: number; gy: number }, { gx: number; gy: number }];
     deck: ReturnType<typeof cityBridgeDeck>;
     points: { gx: number; gy: number }[];
@@ -165,11 +171,15 @@ export class CityView {
     this.postRanges = [];
     for (const pair of this.bridgePairs) {
       const strong = pair.count >= 15;
-      if (this.zoomLevel === "map" && !strong) continue;
+      // Lane-born: an accepted drag quest whose real import exists
+      // draws a deck despite a weak count. The lane is gone (it
+      // drops on satisfaction), the bridge is the payoff.
+      const born = this.born.has(pair.key);
+      if (this.zoomLevel === "map" && !strong && !born) continue;
       const [ax, ay] = proj.project(pair.span[0].gx, pair.span[0].gy);
       const [bx, by] = proj.project(pair.span[1].gx, pair.span[1].gy);
       if (this.plankTexA || this.plankTexB) {
-        if (!strong) continue;
+        if (!strong && !born) continue;
         // Harbour rule: a deck draws only when its whole path is
         // open water (one water segment). A pair with an island
         // in between gets no deck at all. Clipped stubs read as
@@ -204,7 +214,7 @@ export class CityView {
           }));
         }
         this.drawRails(strips, targetH);
-      } else if (strong) {
+      } else if (strong || born) {
         const corners = pair.deck.corners.map((c) => proj.project(c.gx, c.gy)).flat();
         g.poly(corners);
         g.fill({ color: 0xb98652, alpha: 0.92 });
@@ -216,6 +226,48 @@ export class CityView {
         g.moveTo(ax, ay);
         g.lineTo(bx, by);
         g.stroke({ color: 0xcfa06a, alpha: 0.5, width: 2 });
+      }
+    }
+  }
+
+  /** Update the lane-born pair set; rebuild decks + glows
+   * only when the set actually changes. */
+  setBornBridges(next: Set<string>): void {
+    if (next.size === this.born.size && [...next].every((k) => this.born.has(k))) return;
+    this.born = new Set(next);
+    this.buildGlows();
+    this.drawBridges();
+  }
+
+  /** Glow sprites: one per import direction on strong decks,
+   * plus lane-born decks. Rebuilt when the born set changes. */
+  private buildGlows(): void {
+    for (const child of this.glowLayer.removeChildren()) child.destroy();
+    this.glowSprites = [];
+    if (!this.glowTexs.length) return;
+    const proj = this.proj;
+    const TW = 64;
+    let gi = 0;
+    for (const pair of this.bridgePairs) {
+      const strong = pair.count >= 15;
+      if (!strong && !this.born.has(pair.key)) continue;
+      if (!pair.clear) continue; // no deck, no glow (harbour rule)
+      for (const points of pair.dirs) {
+        gi++;
+        const spr = new Sprite(this.glowTexs[0]);
+        spr.anchor.set(0.5);
+        spr.width = TW * 1.15;
+        spr.height = TW * 0.67;
+        spr.blendMode = "add";
+        const cum = [0];
+        for (let i = 0; i + 1 < points.length; i++) {
+          const [px, py] = proj.project(points[i].gx, points[i].gy);
+          const [qx, qy] = proj.project(points[i + 1].gx, points[i + 1].gy);
+          cum.push(cum[i] + Math.hypot(qx - px, qy - py));
+        }
+        const total = cum[cum.length - 1] || 1;
+        this.glowSprites.push({ spr, points, cum: cum.map((c) => c / total), phase: (gi * 0.37) % 1 });
+        this.glowLayer.addChild(spr);
       }
     }
   }
@@ -714,7 +766,7 @@ export class CityView {
         pair.dirs.push(br);
         pairs.set(key, pair);
       }
-      for (const pair of pairs.values()) {
+      for (const [pairKey, pair] of pairs) {
         const br = pair.dirs[0];
         const a = byId.get(br.from);
         const b = byId.get(br.to);
@@ -775,6 +827,7 @@ export class CityView {
           : [out(shorePoints[0], shorePoints[1]), shorePoints[1], out(shorePoints[2], shorePoints[1])];
         this.bridgePairs.push({
           count: pair.count,
+          key: pairKey,
           span,
           deck: cityBridgeDeck(span, pair.count),
           points: deckPoints,
@@ -928,31 +981,7 @@ export class CityView {
       root.addChild(t);
     }
 
-    // Glow sprites: one per import direction on strong decks.
-    if (this.glowTexs.length) {
-      let gi = 0;
-      for (const pair of this.bridgePairs) {
-        if (pair.count < 15) continue;
-        if (!pair.clear) continue; // no deck, no glow (harbour rule)
-        for (const points of pair.dirs) {
-          gi++;
-          const spr = new Sprite(this.glowTexs[0]);
-          spr.anchor.set(0.5);
-          spr.width = TW * 1.15;
-          spr.height = TW * 0.67;
-          spr.blendMode = "add";
-          const cum = [0];
-          for (let i = 0; i + 1 < points.length; i++) {
-            const [px, py] = proj.project(points[i].gx, points[i].gy);
-            const [qx, qy] = proj.project(points[i + 1].gx, points[i + 1].gy);
-            cum.push(cum[i] + Math.hypot(qx - px, qy - py));
-          }
-          const total = cum[cum.length - 1] || 1;
-          this.glowSprites.push({ spr, points, cum: cum.map((c) => c / total), phase: (gi * 0.37) % 1 });
-          this.glowLayer.addChild(spr);
-        }
-      }
-    }
+    this.buildGlows();
     this.glowLayer.visible = false;
     root.addChild(this.glowLayer);
 

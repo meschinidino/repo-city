@@ -59,6 +59,49 @@ export type DropCheck =
   | { ok: true }
   | { ok: false; reason: string };
 
+const TERMINAL = new Set(["accepted", "discarded", "archived"]);
+
+/** Open drag quests whose import does not exist yet, as lanes
+ * { source (used), target (using) }. Terminal quests drop out;
+ * a satisfied quest (import landed) drops out too. */
+export function pendingLanes(
+  sessions: readonly SessionInfo[],
+  edges: readonly LaneEdge[],
+): { source: string; target: string }[] {
+  return sessions
+    .filter(
+      (s) =>
+        s.source_island_id &&
+        s.island_id &&
+        !TERMINAL.has(s.state) &&
+        !hasEdge(edges, s.island_id, s.source_island_id),
+    )
+    .map((s) => ({ source: s.source_island_id!, target: s.island_id! }));
+}
+
+/** Lane-born bridges: accepted drag quests whose import really
+ * exists, as unordered "a|b" pair keys (sorted, like the render
+ * pair map). These draw decks despite weak counts; an accepted
+ * quest without the import draws nothing — a lane becomes a
+ * bridge only once the real import exists. */
+export function bornBridges(
+  sessions: readonly SessionInfo[],
+  edges: readonly LaneEdge[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const s of sessions) {
+    if (
+      s.state === "accepted" &&
+      s.source_island_id &&
+      s.island_id &&
+      hasEdge(edges, s.island_id, s.source_island_id)
+    ) {
+      out.add([s.source_island_id, s.island_id].sort().join("|"));
+    }
+  }
+  return out;
+}
+
 /** One validator for a lane drop, in contract order: same island,
  * duplicate connection, running session on the target, import
  * cycle. Reasons name islands by display name for the UI. */
