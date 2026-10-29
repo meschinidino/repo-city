@@ -103,16 +103,41 @@ fn prune_worktrees(repo: &Path) -> Result<(), String> {
         .arg("-C")
         .arg(repo)
         .args(["worktree", "prune"])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| format!("could not run git: {e}"))?;
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
         return Err(stderr);
     }
-    if stderr.lines().any(|l| l.starts_with("error:") || l.starts_with("fatal:")) {
+    if prune_failed(&stderr) {
         return Err(stderr);
     }
     Ok(())
+}
+
+/// True when prune's stderr carries a real failure. Only
+/// `error:`/`fatal:` lines count: config warnings, `safe.directory`
+/// hints, and trace output must not fail the cleanup. (Git
+/// translates these prefixes under non-English locales; prune
+/// runs under LC_ALL=C so the match is deterministic.)
+fn prune_failed(stderr: &str) -> bool {
+    stderr.lines().any(|l| l.starts_with("error:") || l.starts_with("fatal:"))
+}
+
+/// Shell one-liner that finishes a failed worktree cleanup by
+/// hand: remove the dir if it survived, drop the registration,
+/// delete the branch. Steps join with `;` so each runs whatever
+/// the earlier ones did; paths are single-quoted.
+pub fn manual_cleanup_hint(repo: &Path, worktree_path: &Path, branch: &str) -> String {
+    format!(
+        "git -C '{}' worktree remove --force '{}' ; rm -rf '{}' ; git -C '{}' worktree prune ; git -C '{}' branch -D {branch}",
+        repo.display(),
+        worktree_path.display(),
+        worktree_path.display(),
+        repo.display(),
+        repo.display(),
+    )
 }
 
 /// Branch checked out in `repo` right now. "HEAD" means detached;
@@ -423,6 +448,15 @@ mod tests {
         assert!(git(&repo, &["branch", "--list", "repo-city/*"]).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(repo.with_extension("wts"));
+    }
+
+    #[test]
+    fn prune_failure_means_error_or_fatal_lines_only() {
+        assert!(prune_failed("error: failed to delete '.git/worktrees/wt1': Permission denied"));
+        assert!(prune_failed("fatal: detected dubious ownership in repository"));
+        assert!(!prune_failed(""));
+        assert!(!prune_failed("warning: configuration file uses deprecated syntax"));
+        assert!(!prune_failed("trace: built-in: git 'worktree' 'prune'"));
     }
 
     #[test]

@@ -50,6 +50,8 @@ export interface AcceptResult {
   test_source: string | null;
   test_passed: boolean | null;
   test_output: string;
+  /** Set when the merge landed but the worktree cleanup failed. */
+  cleanup_warning: string | null;
 }
 
 export interface DiffReportView {

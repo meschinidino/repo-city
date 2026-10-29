@@ -1479,7 +1479,13 @@ const READER_GRACE_SECS: u64 = 10;
 const ORPHAN_PROBE_SECS: u64 = 1;
 
 /// SIGKILL a whole process group (Unix). Best effort by design:
-/// a reaped group (ESRCH) is the common case.
+/// a reaped group (ESRCH) is the common case. Known limit: the id
+/// is the reaped leader's, so a fully exited group whose id the
+/// kernel recycled could misdirect the signal. That needs tens of
+/// thousands of forks inside the grace window plus the recycled id
+/// becoming a new group leader; the timeout path has always
+/// carried the same risk, and no race-free liveness check exists
+/// (killpg with signal 0 shares the TOCTOU).
 #[cfg(unix)]
 fn kill_process_group(pid: Option<u32>) {
     if let Some(pid) = pid {
@@ -1802,9 +1808,8 @@ async fn accept_session(
     let cleanup_warning = match crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
         Ok(()) => None,
         Err(e) => Some(format!(
-            "the worktree cleanup failed ({e}); the work is merged, but finish by hand: git -C {} worktree prune && git -C {} branch -D {branch}",
-            root.display(),
-            root.display(),
+            "the worktree cleanup failed ({e}); the work is merged, but finish by hand: {}",
+            crate::worktree::manual_cleanup_hint(&root, &wt_path, &branch),
         )),
     };
     let session = match state.store.transition_state(&id, &["stopped", "finished", "failed", "kept"], "accepted") {
@@ -1891,9 +1896,8 @@ async fn discard_session(
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!(
-                    "the quest is discarded, but the worktree removal failed: {e}; finish by hand: git -C {} worktree prune && git -C {} branch -D {branch}",
-                    root.display(),
-                    root.display(),
+                    "the quest is discarded, but the worktree removal failed: {e}; finish by hand: {}",
+                    crate::worktree::manual_cleanup_hint(&root, &wt_path, &branch),
                 ),
             )
             .into_response();
@@ -2125,18 +2129,44 @@ mod run_checks_tests {
         #[cfg(unix)]
         {
             for pid_file in ["sleep.pid", "sleep2.pid"] {
-                let pid: i32 = std::fs::read_to_string(dir.path().join(pid_file))
-                    .unwrap()
-                    .trim()
-                    .parse()
-                    .unwrap();
-                let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "orphaned sleep {pid} still alive");
+                assert_pid_dead(&dir.path().join(pid_file)).await;
             }
         }
+    }
+
+    // The pipe-holding orphan above trips the probe reap, which
+    // would kill a detached sibling too — so this case, with ONLY
+    // redirected descendants, is what pins the final reap. Remove
+    // the final kill and detached.pid stays alive.
+    #[tokio::test]
+    async fn checks_reap_detached_grandchildren() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("detached.sh"),
+            "#!/bin/sh\nsleep 62 >/dev/null 2>&1 & echo $! > detached.pid\nexit 0\n",
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        let (passed, _) = run_checks(dir.path(), "sh detached.sh").await;
+        assert!(passed);
+        // The drain completes at once (nothing holds the pipes),
+        // so the probe never fires: only the final reap can kill
+        // the detached sleep.
+        assert!(start.elapsed() < Duration::from_secs(30), "took {:?}", start.elapsed());
+        #[cfg(unix)]
+        {
+            assert_pid_dead(&dir.path().join("detached.pid")).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn assert_pid_dead(pid_file: &std::path::Path) {
+        let pid: i32 = std::fs::read_to_string(pid_file).unwrap().trim().parse().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "orphaned sleep {pid} still alive");
     }
 }
 

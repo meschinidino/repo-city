@@ -67,6 +67,13 @@ export function lastFinishNote(events: readonly StoredEvent[]): string | null {
   return null;
 }
 
+/** The Accept card's cleanup line, or null when the cleanup
+ * worked. Absent (old servers) reads the same as null. */
+export function cleanupWarningLine(warning: string | null | undefined): string | null {
+  if (!warning) return null;
+  return `Warning: ${warning}`;
+}
+
 /** Escape server text for innerHTML templates. */
 export function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

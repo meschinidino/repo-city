@@ -199,6 +199,11 @@ async fn concurrent_accepts_serialize_into_one_merge() {
 #[cfg(unix)]
 async fn accept_with_cleanup_failure_still_accepts_and_names_the_leftover() {
     use std::os::unix::fs::PermissionsExt;
+    // Root ignores permission bits, so the fault injection proves
+    // nothing there.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
     let tmp = temp_repo(Some("true"));
     let repo = tmp.path().join("repo");
     let store = Arc::new(Store::in_memory().unwrap());
@@ -225,6 +230,7 @@ async fn accept_with_cleanup_failure_still_accepts_and_names_the_leftover() {
     let warning = v["cleanup_warning"].as_str().unwrap_or("");
     assert!(warning.contains(&format!("repo-city/{}", &s.id[..8])), "{warning}");
     assert!(warning.contains("by hand"), "{warning}");
+    assert!(warning.contains("worktree remove"), "{warning}");
     assert_eq!(std::fs::read_to_string(repo.join("quest.txt")).unwrap(), "did the thing\n");
     assert!(git_out(&repo, &["branch", "--list", "repo-city/*"]).contains("repo-city"));
     assert_eq!(act(&base, &s.id, "accept").await.0, reqwest::StatusCode::CONFLICT);
@@ -533,6 +539,7 @@ async fn discard_failure_still_discards_and_says_so() {
     assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR);
     assert!(err_text(&v).contains("is discarded"), "{}", err_text(&v));
     assert!(err_text(&v).contains("by hand"), "{}", err_text(&v));
+    assert!(err_text(&v).contains("worktree remove"), "{}", err_text(&v));
     let (gstatus, g) = get_session(&base, &s.id).await;
     assert_eq!(gstatus, reqwest::StatusCode::OK);
     assert_eq!(g["state"], "discarded");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escHtml, isFinishable, lastFinishNote, lastTestResult, stallMins, stallText, testLine } from "./finish";
+import { cleanupWarningLine, escHtml, isFinishable, lastFinishNote, lastTestResult, stallMins, stallText, testLine } from "./finish";
 import type { StoredEvent } from "../events/types";
 
 const NOW = 1_000_000_000_000;
@@ -72,5 +72,12 @@ describe("card lines", () => {
 
   it("escapes HTML in server text", () => {
     expect(escHtml("<b>&\"")).toBe("&lt;b&gt;&amp;&quot;");
+  });
+
+  it("words the accept cleanup warning, or nothing when clean", () => {
+    expect(cleanupWarningLine("the worktree cleanup failed (x)")).toBe("Warning: the worktree cleanup failed (x)");
+    expect(cleanupWarningLine(null)).toBeNull();
+    expect(cleanupWarningLine(undefined)).toBeNull();
+    expect(cleanupWarningLine("")).toBeNull();
   });
 });

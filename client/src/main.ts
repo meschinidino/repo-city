@@ -8,7 +8,7 @@ import { CityView } from "./city/renderCity";
 import { acceptSession, connectEvents, createSession, fetchAcceptPreview, fetchExtraction, fetchReport, fetchSessionEvents, loadFailureText, sessionAction, stopSession, type AcceptPreview, type DiffReportView, type SessionInfo } from "./city/live";
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
 import { HarborBar, stateText } from "./city/bar";
-import { escHtml, isFinishable, lastFinishNote, lastTestResult, stallText, testLine } from "./city/finish";
+import { cleanupWarningLine, escHtml, isFinishable, lastFinishNote, lastTestResult, stallText, testLine } from "./city/finish";
 import type { SessionInfo as BarSession } from "./city/live";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -365,10 +365,12 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
     try {
       const r = await acceptSession(server, id);
       const checks = r.test_command ? `Checks passed (${r.test_command}).` : "Checks not run (no test command found).";
+      const warning = cleanupWarningLine(r.cleanup_warning);
       box.innerHTML =
         "<h3>Accepted</h3>" +
         `<div class="report-ok">${escHtml(`Merged into ${r.session.base_branch ?? "the main checkout"} (${r.merge_sha.slice(0, 8)}).`)}</div>` +
         `<div class="report-line">${escHtml(checks)}</div>` +
+        (warning ? `<div class="report-err">${escHtml(warning)}</div>` : "") +
         (r.test_output ? `<pre class="report-pre">${escHtml(r.test_output)}</pre>` : "") +
         backRow;
       wireBack(box, forSession);
