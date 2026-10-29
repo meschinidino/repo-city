@@ -141,7 +141,9 @@ async fn accept_merges_uncommitted_work_runs_checks_and_cleans_up() {
         std::fs::read_to_string(repo.join("quest.txt")).unwrap(),
         "did the thing\n"
     );
-    let log = git_out(&repo, &["log", "--oneline", "-2"]);
+    // Full log, not -2: same-second commits tie in git's order,
+    // so the quest commit is not always second.
+    let log = git_out(&repo, &["log", "--oneline"]);
     assert!(log.contains(&format!("repo-city/{}", &s.id[..8])), "{log}");
     assert!(log.contains("Repo City: accept quest"), "{log}");
 
@@ -276,6 +278,62 @@ async fn accept_without_a_test_command_reports_not_run() {
     assert_eq!(v["session"]["state"], "accepted");
     assert!(v["test_passed"].is_null());
     assert!(v["test_output"].as_str().unwrap().contains("not run"));
+}
+
+// Regression: ISSUE-QA1 — Accept ran checks but never logged the
+// outcome, so a failed check left no test_result and the island
+// never flew the failed-test pennant.
+// Found by /gstack-qa on 2026-10-29
+// Report: /tmp/qa-step5/qa-report-step5.md
+#[tokio::test]
+async fn accept_records_its_check_outcome_as_a_test_result_event() {
+    async fn test_results(base: &str, id: &str) -> Vec<serde_json::Value> {
+        let client = reqwest::Client::new();
+        let events: Vec<serde_json::Value> = client
+            .get(format!("{base}/api/sessions/{id}/events"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        events.into_iter().filter(|e| e["type"] == "test_result").collect()
+    }
+
+    // Failing checks log one failed result, on the rolled-back quest.
+    let tmp = temp_repo(Some("false"));
+    let repo = tmp.path().join("repo");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let base = serve_with(store.clone()).await;
+    let s = seed_quest(&store, &repo, &tmp.path().join("wts"), Some("api"));
+    assert_eq!(act(&base, &s.id, "stop").await.0, reqwest::StatusCode::OK);
+    assert_eq!(act(&base, &s.id, "accept").await.0, reqwest::StatusCode::CONFLICT);
+    let results = test_results(&base, &s.id).await;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["passed"], false);
+    assert!(results[0]["summary"].as_str().unwrap().contains("make test"));
+
+    // Passing checks log one passed result, on the accepted quest.
+    let tmp = temp_repo(Some("true"));
+    let repo = tmp.path().join("repo");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let base = serve_with(store.clone()).await;
+    let s = seed_quest(&store, &repo, &tmp.path().join("wts"), Some("api"));
+    assert_eq!(act(&base, &s.id, "stop").await.0, reqwest::StatusCode::OK);
+    assert_eq!(act(&base, &s.id, "accept").await.0, reqwest::StatusCode::OK);
+    let results = test_results(&base, &s.id).await;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["passed"], true);
+
+    // No test command means no result: "not run" is not a failure.
+    let tmp = temp_repo(None);
+    let repo = tmp.path().join("repo");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let base = serve_with(store.clone()).await;
+    let s = seed_quest(&store, &repo, &tmp.path().join("wts"), Some("api"));
+    assert_eq!(act(&base, &s.id, "stop").await.0, reqwest::StatusCode::OK);
+    assert_eq!(act(&base, &s.id, "accept").await.0, reqwest::StatusCode::OK);
+    assert!(test_results(&base, &s.id).await.is_empty());
 }
 
 #[tokio::test]

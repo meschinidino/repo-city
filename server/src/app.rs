@@ -1655,6 +1655,18 @@ async fn accept_session(
             (Some(t.command.clone()), Some(t.source.clone()), Some(passed), tail)
         }
     };
+    // The check outcome is a real test result: the island flies
+    // the pennant and the card quotes it. "Not run" logs nothing.
+    if let (Some(cmd), Some(passed)) = (&test_command, test_passed) {
+        let _ = state.emit(
+            &id,
+            Source::System,
+            EventPayload::TestResult {
+                passed,
+                summary: format!("{cmd} after merge: {}", if passed { "passed" } else { "failed" }),
+            },
+        );
+    }
     if test_passed == Some(false) {
         let _ = crate::worktree::reset_hard(&root, &pre_sha);
         return err(
