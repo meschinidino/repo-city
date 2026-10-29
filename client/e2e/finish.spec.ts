@@ -75,6 +75,10 @@ test("finish journey: keep, accept refusal, discard from the card", async ({ pag
   await expect(page.locator("#detail-title")).toHaveText("Keep this quest");
   await page.locator("#act-stop").click();
   await expect(page.locator("#detail-state")).toContainText("stopped");
+  // Regression ISSUE-QA2: the follow-up input showed on quests
+  // that cannot take a follow-up (no CLI session), its button
+  // hidden but its input dangling. Found by /gstack-qa on 2026-10-29.
+  await expect(page.locator("#follow-task")).toBeHidden();
   await page.locator("#act-report").click();
   const card = page.locator("#report");
   await expect(card).toBeVisible();

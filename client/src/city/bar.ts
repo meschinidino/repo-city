@@ -355,6 +355,10 @@ export class HarborBar {
     }
     void this.loadFeed(s);
     const allowed = actionsFor(s);
+    // The whole follow-up row (label, input, button) hides when
+    // the quest cannot take one; the button alone used to hide
+    // and left its input dangling (QA2).
+    el("follow-row").style.display = allowed.includes("follow-up") ? "" : "none";
     for (const [id, action] of [
       ["act-pause", "pause"],
       ["act-resume", "resume"],
