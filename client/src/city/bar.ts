@@ -14,6 +14,7 @@ import {
   type SessionInfo,
 } from "./live";
 import type { StoredEvent } from "../events/types";
+import { stallText } from "./finish";
 
 export const MAX_ACTIVE_QUESTS = 3;
 
@@ -38,6 +39,9 @@ export function stateText(state: string): string {
     case "stopped": return "stopped";
     case "finished": return "finished";
     case "failed": return "crashed";
+    case "kept": return "kept";
+    case "accepted": return "accepted";
+    case "discarded": return "discarded";
     case "archived": return "archived";
     default: return state;
   }
@@ -58,7 +62,8 @@ export function capState(sessions: SessionInfo[]): CapState {
 
 /** Actions the quest log may offer (server enforces). Follow-up
  * needs a CLI session to continue; without one the server 409s,
- * so it is not offered. */
+ * so it is not offered. Accept, Discard, and Keep live on the
+ * report card, not here (design: finish flow). */
 export function actionsFor(s: SessionInfo): string[] {
   const follow = s.cli_session_id ? ["follow-up"] : [];
   switch (s.state) {
@@ -66,7 +71,10 @@ export function actionsFor(s: SessionInfo): string[] {
     case "paused": return ["resume", "stop"];
     case "finished": return [...follow, "archive", "report"];
     case "failed": return [...follow, "archive", "report"];
-    case "stopped": return ["archive", "report"];
+    case "stopped": return [...follow, "archive", "report"];
+    case "kept": return [...follow, "archive", "report"];
+    case "accepted": return ["archive", "report"];
+    case "discarded": return ["archive", "report"];
     default: return [];
   }
 }
@@ -281,9 +289,12 @@ export class HarborBar {
       sail.alt = "";
       const label = document.createElement("span");
       label.className = "token-text";
-      label.textContent = `${this.islandName(s.island_id)} · ${stateText(s.state)}`;
+      // A stalled quest names its silence on the token, with
+      // a pulsing amber dot instead of the working one.
+      const stall = stallText(s, Date.now());
+      label.textContent = `${this.islandName(s.island_id)} · ${stateText(s.state)}${stall ? ` · ${stall}` : ""}`;
       const dot = document.createElement("span");
-      dot.className = `dot dot-${s.state}`;
+      dot.className = stall ? "dot dot-stalled" : `dot dot-${s.state}`;
       b.append(sail, label, dot);
       b.title = s.task ?? "";
       b.addEventListener("click", () => {
@@ -328,7 +339,11 @@ export class HarborBar {
     detail.style.display = "block";
     el("detail-title").textContent = s.task ?? "Untitled quest";
     const chosen = [agentLabel(s), s.model, s.effort].filter(Boolean).join(" · ");
-    el("detail-state").textContent = `${this.islandName(s.island_id)} — ${stateText(s.state)}${chosen ? ` · ${chosen}` : ""}`;
+    const stall = stallText(s, Date.now());
+    el("detail-state").textContent =
+      `${this.islandName(s.island_id)} — ${stateText(s.state)}${stall ? ` · ${stall}` : ""}${chosen ? ` · ${chosen}` : ""}`;
+    // A stalled quest already offers Nudge (the message box: the
+    // message runs when this run ends) and Stop below.
     const canMessage = s.worktree_path !== null && (s.state === "working" || s.state === "paused");
     el("msg-row").style.display = canMessage ? "" : "none";
     const msgNote = el("msg-note");

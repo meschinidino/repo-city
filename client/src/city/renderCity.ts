@@ -858,7 +858,9 @@ export class CityView {
     if (filePos) {
       const [tx, ty] = proj.project(filePos.gx + PLOT / 2, filePos.gy + PLOT + 0.4);
       this.shipTarget = [tx, ty];
-      this.construction.visible = view.state === "working";
+      // Crashed keeps the scaffold frozen where the work died
+      // (design: stalled-construction state); finished work clears it.
+      this.construction.visible = view.state === "working" || view.state === "failed";
       this.construction.position.set(tx - TW * 0.7, ty - TW * 1.5);
     } else if (island) {
       const [tx, ty] = proj.project(island.gate.gx + 1, island.gate.gy + island.rows * PLOT + 0.6);

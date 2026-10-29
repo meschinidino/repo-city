@@ -62,6 +62,11 @@
       .dot-paused { background: var(--warning); }
       .dot-finished { background: var(--success); }
       .dot-failed { background: var(--error); }
+      .dot-stopped { background: var(--text-muted); }
+      .dot-kept { background: var(--warning); }
+      .dot-accepted { background: var(--success); }
+      .dot-discarded { background: var(--text-muted); }
+      .dot-stalled { background: var(--warning); animation: pulse 1.6s ease-in-out infinite; }
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
       #new-quest, .primary-btn {
         min-height: 44px; padding: 8px 16px;
@@ -133,6 +138,29 @@
         position: fixed; z-index: 21; display: none; height: 2px;
         background: var(--accent); transform-origin: 0 50%; opacity: .8;
       }
+      /* Finish section on the report card (T6): preview lines,
+         plain-English results, and the test output tail. */
+      #report h3 { font: 800 14px "Bricolage Grotesque", sans-serif; margin: 0 0 6px; }
+      .report-test { margin-top: 8px; font-size: 13px; }
+      .report-test-pass { color: var(--success); }
+      .report-test-fail { color: #ffb4a3; }
+      .report-finish { border-top: 1px solid rgba(234,242,240,.14); margin-top: 10px; padding-top: 8px; }
+      .report-line { font-size: 13px; margin: 3px 0; }
+      .report-muted { color: var(--text-muted); }
+      .report-err { color: #ffb4a3; font-size: 13px; margin: 6px 0; white-space: pre-wrap; }
+      .report-ok { color: var(--success); font-size: 13px; margin: 6px 0; white-space: pre-wrap; }
+      .report-pre {
+        font: 400 11px "JetBrains Mono", monospace; white-space: pre-wrap;
+        background: var(--surface-raised); border-radius: var(--radius-sm);
+        padding: 8px; max-height: 140px; overflow-y: auto; margin: 6px 0;
+      }
+      #report input[type="text"] {
+        width: 100%; box-sizing: border-box; min-height: 44px; margin-top: 6px;
+        background: var(--surface-raised); color: var(--text);
+        border: 1px solid var(--text-muted); border-radius: var(--radius-sm);
+        padding: 8px 10px; font: 400 14px "Overpass", system-ui, sans-serif;
+      }
+      #report .ghost-btn, #report .primary-btn { min-height: 36px; padding: 4px 12px; }
 
       @media (prefers-reduced-motion: reduce) {
         #questlog, #report { animation: none; }

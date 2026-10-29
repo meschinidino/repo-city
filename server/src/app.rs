@@ -241,6 +241,10 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         .route("/api/sessions/{id}/archive", post(archive_session))
         .route("/api/sessions/{id}/follow-up", post(follow_up_session))
         .route("/api/sessions/{id}/message", post(message_session))
+        .route("/api/sessions/{id}/accept-preview", get(accept_preview))
+        .route("/api/sessions/{id}/accept", post(accept_session))
+        .route("/api/sessions/{id}/discard", post(discard_session))
+        .route("/api/sessions/{id}/keep", post(keep_session))
         .route("/ws", get(ws_handler))
         // Local single-user tool: only loopback pages (the Vite dev
         // client) may call this API from a browser. A permissive
@@ -452,6 +456,14 @@ async fn create_session(
     } else {
         (None, None, None)
     };
+    // The T6 merge target: whatever is checked out when the
+    // quest starts. Watcher-only quests merge nothing, so they
+    // record none.
+    let base_branch = if body.spawn {
+        crate::worktree::current_branch(&root).ok()
+    } else {
+        None
+    };
     let session = match state.store.create_session_guarded(
         &body.repo_path,
         body.island_id.as_deref(),
@@ -460,6 +472,7 @@ async fn create_session(
         model.as_deref(),
         effort.as_deref(),
         agent.as_deref(),
+        base_branch.as_deref(),
     ) {
         Ok(s) => s,
         Err(e @ crate::store::CreateError::IslandLocked { .. })
@@ -1346,7 +1359,7 @@ async fn archive_session(
     }
     let session = match state
         .store
-        .transition_state(&id, &["finished", "failed", "stopped"], "archived")
+        .transition_state(&id, &["finished", "failed", "stopped", "accepted", "discarded", "kept"], "archived")
     {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1360,9 +1373,10 @@ struct FollowUp {
     task: String,
 }
 
-/// Follow-up (T5): a finished or failed quest gets a new task in
-/// the same CLI conversation and the same worktree. Without a CLI
-/// session id there is no conversation to continue: honest 409.
+/// Follow-up (T5): a finished, failed, or kept quest gets a new
+/// task in the same CLI conversation and the same worktree. This
+/// is also the conflict path's "send back to fix it". Without a
+/// CLI session id there is no conversation to continue: honest 409.
 async fn follow_up_session(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -1390,7 +1404,7 @@ async fn follow_up_session(
     }
     let session = match state
         .store
-        .transition_state(&id, &["finished", "failed"], "working")
+        .transition_state(&id, &["finished", "failed", "kept", "stopped"], "working")
     {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1402,6 +1416,373 @@ async fn follow_up_session(
     spawn_agent(&before, state.clone(), root, body.task.clone(), Some(cli_id));
     let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
     session_json(&updated).into_response()
+}
+
+/// How long the post-merge checks may run before Accept calls
+/// them failed and rolls the merge back.
+const TEST_TIMEOUT_SECS: u64 = 300;
+
+/// Last characters of the check output kept for the card.
+const TEST_TAIL_CHARS: usize = 2000;
+
+/// Run the discovered test command in `dir`: no shell, output
+/// piped so a verbose suite cannot wedge the pipe, killed on
+/// timeout. Returns (passed, output tail).
+async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    let mut parts = command.split_whitespace();
+    let Some(program) = parts.next() else {
+        return (false, "empty test command".to_string());
+    };
+    let args: Vec<&str> = parts.collect();
+    let mut child = match tokio::process::Command::new(program)
+        .args(&args)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return (false, format!("could not run {command}: {e}")),
+    };
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let reader = tokio::spawn(async move {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        if let Some(o) = stdout.as_mut() {
+            let _ = o.read_to_end(&mut out).await;
+        }
+        if let Some(e) = stderr.as_mut() {
+            let _ = e.read_to_end(&mut err).await;
+        }
+        (out, err)
+    });
+    // One waiter at a time: on timeout the wait future drops
+    // and the handle stays usable for the kill below.
+    let (timed_out, status) = match tokio::time::timeout(Duration::from_secs(TEST_TIMEOUT_SECS), child.wait()).await
+    {
+        Ok(Ok(status)) => (false, Some(status)),
+        Ok(Err(_)) => (false, None),
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            (true, None)
+        }
+    };
+    // The kill closes the pipes, so the reader always finishes.
+    let (out, err) = reader.await.unwrap_or_default();
+    let mut text = String::from_utf8_lossy(&out).into_owned();
+    text.push_str(&String::from_utf8_lossy(&err));
+    let tail: String = text.chars().skip(text.chars().count().saturating_sub(TEST_TAIL_CHARS)).collect();
+    if timed_out {
+        return (false, format!("timed out after {TEST_TIMEOUT_SECS}s; last output:\n{tail}"));
+    }
+    (status.is_some_and(|s| s.success()), tail)
+}
+
+/// Read-only Accept preview for the report card (T6): the merge
+/// target, what is checked out now, dirty files, and the test
+/// command that would run. The POST re-checks everything.
+async fn accept_preview(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    let state_ok = ["stopped", "finished", "failed", "kept"].contains(&session.state.as_str());
+    let worktree_exists = session.worktree_path.as_deref().is_some_and(|p| {
+        let path = PathBuf::from(p);
+        path.is_dir() && path.join(".git").exists()
+    });
+    let root = PathBuf::from(&session.repo_path);
+    let current_branch = crate::worktree::current_branch(&root).ok();
+    let on_target = match (&session.base_branch, &current_branch) {
+        (Some(base), Some(current)) => base == current,
+        _ => false,
+    };
+    let dirty_files = crate::worktree::dirty_files(&root).unwrap_or_default();
+    let merge_in_progress = crate::worktree::merge_in_progress(&root);
+    let test = crate::worktree::discover_test_command(&root).map(|t| {
+        serde_json::json!({
+            "command": t.command,
+            "source": t.source,
+            "dir": t.dir.to_string_lossy(),
+        })
+    });
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session": serde_json::to_value(&session).unwrap(),
+            "state_ok": state_ok,
+            "worktree_exists": worktree_exists,
+            "base_branch": session.base_branch,
+            "current_branch": current_branch,
+            "on_target": on_target,
+            "dirty_files": dirty_files,
+            "merge_in_progress": merge_in_progress,
+            "test": test,
+        })),
+    )
+        .into_response()
+}
+
+/// Accept (T6): merge the session branch into the branch that was
+/// checked out at creation, then re-run the checks. Every guard
+/// refuses with the reason: wrong state, no worktree, unknown
+/// target, wrong checkout, unfinished or dirty main, conflict,
+/// failing checks (the merge is rolled back). A merged quest
+/// loses its worktree and branch; retrying after a half-failure
+/// is safe (an already-merged branch merges to a no-op).
+async fn accept_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    if ["working", "paused"].contains(&session.state.as_str()) {
+        return err(
+            StatusCode::CONFLICT,
+            format!("the quest is still {}; stop it first, then accept", session.state),
+        )
+        .into_response();
+    }
+    if !["stopped", "finished", "failed", "kept"].contains(&session.state.as_str()) {
+        return err(
+            StatusCode::CONFLICT,
+            format!("a {} quest cannot be accepted", session.state),
+        )
+        .into_response();
+    }
+    let Some(wt) = session.worktree_path.clone() else {
+        return err(StatusCode::CONFLICT, "this quest has no worktree: there is nothing to merge".to_string())
+            .into_response();
+    };
+    let wt_path = PathBuf::from(&wt);
+    if !(wt_path.is_dir() && wt_path.join(".git").exists()) {
+        return err(StatusCode::CONFLICT, "the quest worktree is gone; there is nothing to merge".to_string())
+            .into_response();
+    }
+    let Some(base) = session.base_branch.clone() else {
+        return err(
+            StatusCode::CONFLICT,
+            "this quest started before the finish flow learned merge targets; its target branch was never recorded".to_string(),
+        )
+        .into_response();
+    };
+    if base == "HEAD" {
+        return err(
+            StatusCode::CONFLICT,
+            "the main checkout was detached when this quest started, so it has no merge target".to_string(),
+        )
+        .into_response();
+    }
+    let root = PathBuf::from(&session.repo_path);
+    let current = match crate::worktree::current_branch(&root) {
+        Ok(b) => b,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the main checkout: {e}")).into_response(),
+    };
+    if current != base {
+        return err(
+            StatusCode::CONFLICT,
+            format!("the main checkout is on {current}; switch it to {base} to accept this quest"),
+        )
+        .into_response();
+    }
+    if crate::worktree::merge_in_progress(&root) {
+        return err(
+            StatusCode::CONFLICT,
+            "the main checkout has an unfinished merge; finish or abort it first".to_string(),
+        )
+        .into_response();
+    }
+    let dirty = match crate::worktree::dirty_files(&root) {
+        Ok(d) => d,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the main checkout: {e}")).into_response(),
+    };
+    if !dirty.is_empty() {
+        return err(
+            StatusCode::CONFLICT,
+            format!("the main checkout has uncommitted changes ({}); commit or stash them first", dirty.join(", ")),
+        )
+        .into_response();
+    }
+    // The agent never commits; Accept lands its uncommitted work
+    // on the session branch first, labeled as such.
+    match crate::worktree::dirty_files(&wt_path) {
+        Ok(d) if !d.is_empty() => {
+            let short = &session.id[..session.id.len().min(8)];
+            if let Err(e) = crate::worktree::commit_all(&wt_path, &format!("Repo City: accept quest {short} work")) {
+                return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not commit the quest work: {e}")).into_response();
+            }
+        }
+        Ok(_) => {}
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the quest worktree: {e}")).into_response(),
+    }
+    let branch = crate::worktree::branch_for(&session.id);
+    let pre_sha = match crate::worktree::head_sha(&root) {
+        Ok(sha) => sha,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not read the main checkout: {e}")).into_response(),
+    };
+    let merge_sha = match crate::worktree::merge_branch(&root, &branch) {
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("the merge failed: {e}")).into_response(),
+        Ok(crate::worktree::MergeOutcome::Conflict { files }) => {
+            return err(
+                StatusCode::CONFLICT,
+                format!("the merge conflicts on {}; send the quest back to fix it, or discard", files.join(", ")),
+            )
+            .into_response();
+        }
+        Ok(crate::worktree::MergeOutcome::Merged { sha }) => sha,
+    };
+    // Checks re-run after every merge, in the merged tree.
+    let test = crate::worktree::discover_test_command(&root);
+    let (test_command, test_source, test_passed, test_output) = match &test {
+        None => (None, None, None, "no test command found (package.json, justfile, Makefile); not run".to_string()),
+        Some(t) => {
+            let (passed, tail) = run_checks(&t.dir, &t.command).await;
+            (Some(t.command.clone()), Some(t.source.clone()), Some(passed), tail)
+        }
+    };
+    if test_passed == Some(false) {
+        let _ = crate::worktree::reset_hard(&root, &pre_sha);
+        return err(
+            StatusCode::CONFLICT,
+            format!(
+                "checks failed ({} from {}); the merge was rolled back. Last output:\n{}",
+                test_command.unwrap_or_default(),
+                test_source.unwrap_or_default(),
+                test_output
+            ),
+        )
+        .into_response();
+    }
+    if let Err(e) = crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("merged, but the worktree cleanup failed: {e}; retry Accept to finish"),
+        )
+        .into_response();
+    }
+    let session = match state.store.transition_state(&id, &["stopped", "finished", "failed", "kept"], "accepted") {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let checks = match (&test_command, test_passed) {
+        (Some(cmd), Some(true)) => format!("checks passed ({cmd})"),
+        _ => "checks not run (no test command found)".to_string(),
+    };
+    let _ = state.emit(
+        &id,
+        Source::System,
+        EventPayload::AgentMessage {
+            text: format!("Quest accepted: merged {branch} into {base} ({}). {checks}.", &merge_sha[..merge_sha.len().min(8)]),
+        },
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session": serde_json::to_value(&session).unwrap(),
+            "merge_sha": merge_sha,
+            "test_command": test_command,
+            "test_source": test_source,
+            "test_passed": test_passed,
+            "test_output": test_output,
+        })),
+    )
+        .into_response()
+}
+
+/// Discard (T6): the worktree and session branch go away after the
+/// card's explicit confirmation. Allowed from any live state: a
+/// running quest is stopped first. Already-accepted or already-
+/// discarded quests refuse.
+async fn discard_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let session = match state.store.get_session(&id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    if ["accepted", "discarded"].contains(&session.state.as_str()) {
+        return err(StatusCode::CONFLICT, format!("the quest is already {}", session.state)).into_response();
+    }
+    if ["working", "paused"].contains(&session.state.as_str()) {
+        state.teardown_runtime(&id).await;
+    }
+    let root = PathBuf::from(&session.repo_path);
+    let mut gone_already = true;
+    if let Some(wt) = session.worktree_path.as_deref() {
+        let wt_path = PathBuf::from(wt);
+        if wt_path.exists() {
+            gone_already = false;
+            if let Err(e) = crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
+                return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not remove the worktree: {e}")).into_response();
+            }
+        }
+    }
+    let session = match state.store.transition_state(
+        &id,
+        &["working", "paused", "stopped", "finished", "failed", "kept", "archived"],
+        "discarded",
+    ) {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let _ = state.emit(
+        &id,
+        Source::System,
+        EventPayload::AgentMessage {
+            text: if gone_already {
+                "Quest discarded: the worktree was already gone.".to_string()
+            } else {
+                "Quest discarded: the worktree and session branch were removed.".to_string()
+            },
+        },
+    );
+    session_json(&session).into_response()
+}
+
+/// Keep for later (T6): the worktree stays untouched and the
+/// quest reads finished-unmerged. The island lock is already
+/// released (it covers working/paused only).
+async fn keep_session(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !mutation_allowed(&headers) {
+        return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
+    }
+    let session = match state.store.transition_state(&id, &["stopped", "finished", "failed"], "kept") {
+        Ok(s) => s,
+        Err(e) => return transition_err(e).into_response(),
+    };
+    let _ = state.emit(
+        &id,
+        Source::System,
+        EventPayload::AgentMessage {
+            text: "Quest kept for later: the worktree stays untouched.".to_string(),
+        },
+    );
+    session_json(&session).into_response()
 }
 
 #[derive(Deserialize)]

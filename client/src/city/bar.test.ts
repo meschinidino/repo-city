@@ -6,7 +6,7 @@ import { AGENT_CHOICES, actionsFor, agentLabel, capState, feedLines, stateText }
 import type { SessionInfo } from "./live";
 
 const s = (state: string, task = "t", worktree: string | null = "/wt"): SessionInfo =>
-  ({ id: Math.random().toString(36).slice(2), repo_path: "/r", worktree_path: worktree, island_id: null, task, state, cli_session_id: null, model: null, effort: null, agent: "claude", pending_task: null, created_ms: 0, updated_ms: 0 });
+  ({ id: Math.random().toString(36).slice(2), repo_path: "/r", worktree_path: worktree, island_id: null, task, state, base_branch: "main", last_event_ms: null, cli_session_id: null, model: null, effort: null, agent: "claude", pending_task: null, created_ms: 0, updated_ms: 0 });
 
 describe("capState (server rule: 3 spawned working quests)", () => {
   it("caps at three working quests with worktrees and names them", () => {
@@ -24,6 +24,9 @@ describe("stateText and actionsFor", () => {
     expect(stateText("finished")).toBe("finished");
     expect(stateText("failed")).toBe("crashed");
     expect(stateText("working")).toBe("working");
+    expect(stateText("kept")).toBe("kept");
+    expect(stateText("accepted")).toBe("accepted");
+    expect(stateText("discarded")).toBe("discarded");
   });
   it("actions follow the state", () => {
     expect(actionsFor(s("working"))).toContain("pause");
@@ -35,6 +38,14 @@ describe("stateText and actionsFor", () => {
     expect(actionsFor(s("finished"))).not.toContain("follow-up");
     const withCli = { ...s("finished"), cli_session_id: "cli-1" };
     expect(actionsFor(withCli)).toContain("follow-up");
+  });
+  it("stopped and kept quests can send back, finished quests can report", () => {
+    const stopped = { ...s("stopped"), cli_session_id: "cli-1" };
+    const kept = { ...s("kept"), cli_session_id: "cli-1" };
+    expect(actionsFor(stopped)).toContain("follow-up");
+    expect(actionsFor(kept)).toContain("follow-up");
+    expect(actionsFor(s("accepted"))).toEqual(["archive", "report"]);
+    expect(actionsFor(s("discarded"))).toEqual(["archive", "report"]);
   });
 });
 

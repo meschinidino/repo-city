@@ -4,11 +4,17 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ## [Unreleased]
 
-### Added — procedural ribbon bridges (on `feat/ribbon-bridges`, not merged)
+### Merged — procedural ribbon bridges (PR #20, owner taste pass)
 - Bent bridges are mitered ribbons now: one strip per leg bends at any angle, each leg in its direction plank tile, posts stamp along the rails with sagging rope rails. This supersedes the corner-piece sprite (PR #19).
 - New art is cropped from the approved bridge sprites (pure-plank tiles plus a shaft-only post); full sprites sliced transparency across miter seams.
 - deckRibbon: miter joins, bevel past 120° deflection, butt fallback for short legs and exact reversals. Opus review caught a triangle-coverage P0 (fixed, coverage test added).
 - Tests: Vitest 106, Playwright 5, all joints re-shot clean after the fix. Owner taste pass.
+
+### Added — T6 finish flow (step 5, on `feat/step5-finish-flow`, not merged)
+- Report card finish section, replacing the honest "Finish flow arrives in step 5" line. Accept merges on guards: the target is the branch checked out at quest creation (recorded then, shown on the card); a dirty, off-target, or mid-merge main checkout refuses in words; uncommitted quest work is committed on the quest branch first; the merge is explicit (`--no-ff`); the discovered test command re-runs after the merge and a failure rolls the merge back. Discard removes the worktree and branch after one explicit confirmation. Keep for later leaves the worktree untouched and releases the island.
+- Test command discovery: a `package.json` test script first, then a justfile `test` recipe, then a Makefile `test` target; root first, then one level of subdirectories. Nothing found shows as "not run", never as passed.
+- Failure states in plain words: a working quest silent for 3 minutes reads stalled ("no news for N min") on its token, detail line, and the status strip; crashed keeps the scaffold frozen where the work died; a failing test run flies the red pennant and a card line; conflicts name their files and offer send-back-to-fix inline or Discard. Follow-up now also continues stopped and kept quests (the conflict path needs it).
+- Tests: cargo 33 lib + 8 HTTP finish-flow tests on real git repos, Vitest 93, Playwright 6 (new finish journey: keep, accept refusal, discard from the card).
 
 ### Merged — PR #18 accepted by the owner (2026-10-28)
 - Step 4 (T12 Harbor bar and its owner rounds) passed owner judgement and merged. One Opus review pass over the last two rounds is still owed; both reviewers were at their usage limits.
