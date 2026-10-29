@@ -42,20 +42,22 @@
       }
       #bar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       #tokens { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
-      /* Instant hover card above the bar: full task plus island,
-         state, stall. pointer-events none so it never blocks the
-         token or sticks around; no animation, so no motion
-         preference handling needed. */
+      /* Instant hover card above the token: full task plus island,
+         state, stall. Same surface language as the quest log and
+         report card (surface, radius-lg, shared shadow, Bricolage
+         title). pointer-events none so it never blocks the token
+         or sticks around; no animation, so no motion preference
+         handling needed. */
       #hovercard {
         position: absolute; bottom: calc(100% + 8px); left: 8px; z-index: 30;
-        max-width: min(360px, 80vw); padding: 8px 12px;
-        background: var(--surface-raised); color: var(--text);
-        border: 1px solid rgba(234,242,240,.2); border-radius: var(--radius-lg);
-        box-shadow: 0 8px 24px rgba(4,16,20,.5);
+        max-width: min(360px, 80vw); padding: 12px 14px;
+        background: var(--surface); color: var(--text);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 12px 32px rgba(8,24,28,.45);
         pointer-events: none;
       }
-      .hover-title { font: 700 14px "Overpass", system-ui, sans-serif; }
-      .hover-meta { font: 600 12px "Overpass", system-ui, sans-serif; color: var(--text-muted); margin-top: 2px; }
+      .hover-title { font: 800 14px "Bricolage Grotesque", sans-serif; }
+      .hover-meta { font: 600 12px "Overpass", system-ui, sans-serif; color: var(--text-muted); margin-top: 3px; }
       .token { flex: none; }
       .token {
         display: inline-flex; align-items: center; gap: 8px;
