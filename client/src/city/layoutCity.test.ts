@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, GAP_PLOTS, islandShape, layoutCity, PLOT, plotDepth, repairBridges, waterSegments } from "./layoutCity";
+import { arrangePlots, bridgeAxisLegs, bridgeChevron, bridgeSpan, cityBridgeDeck, GAP_PLOTS, islandShape, layoutCity, PLOT, plotDepth, repairBridges, studsOnPath, waterSegments } from "./layoutCity";
 import type { Extraction } from "./types";
 
 // Hand-built extraction in the server's schema (not a live repo):
@@ -351,5 +351,49 @@ describe("building arrangement inside an island", () => {
       if (kinds[i] === kinds[j] && Math.abs(pi.x - pj.x) + Math.abs(pi.y - pj.y) === 1) rowMajor++;
     }
     expect(same).toBeLessThan(rowMajor);
+  });
+});
+
+describe("studsOnPath (rail post stations)", () => {
+  it("keeps both endpoints and full-spacing middles", () => {
+    expect(studsOnPath([[0, 0], [100, 0]], 25)).toEqual([[0, 0], [25, 0], [50, 0], [75, 0], [100, 0]]);
+  });
+
+  it("shifts middles by the phase (rails stagger)", () => {
+    expect(studsOnPath([[0, 0], [100, 0]], 25, 12.5)).toEqual([[0, 0], [12.5, 0], [37.5, 0], [62.5, 0], [87.5, 0], [100, 0]]);
+  });
+
+  it("drops a middle closer than half a spacing to an end", () => {
+    // A middle at 24 sits 10px from the end at 34: dropped.
+    expect(studsOnPath([[0, 0], [50, 0]], 24)).toEqual([[0, 0], [24, 0], [50, 0]]);
+    expect(studsOnPath([[0, 0], [34, 0]], 24)).toEqual([[0, 0], [34, 0]]);
+  });
+
+  it("walks corners by arclength", () => {
+    const studs = studsOnPath([[0, 0], [30, 0], [30, 30]], 20);
+    expect(studs).toHaveLength(4);
+    expect(studs[0]).toEqual([0, 0]);
+    expect(studs[1]).toEqual([20, 0]);
+    expect(studs[2]).toEqual([30, 10]);
+    expect(studs[3]).toEqual([30, 30]);
+  });
+
+  it("degenerates sanely", () => {
+    expect(studsOnPath([], 22)).toEqual([]);
+    expect(studsOnPath([[5, 5]], 22)).toEqual([[5, 5]]);
+    expect(studsOnPath([[0, 0], [10, 0]], 22)).toEqual([[0, 0], [10, 0]]);
+  });
+
+  it("treats a large phase as a grid offset", () => {
+    const studs = studsOnPath([[0, 0], [100, 0]], 25, 30);
+    expect(studs).toHaveLength(5);
+    studs.forEach(([x, y], k) => {
+      expect(x).toBeCloseTo([0, 30, 55, 80, 100][k], 8);
+      expect(y).toBe(0);
+    });
+  });
+
+  it("walks over zero-length middle segments", () => {
+    expect(studsOnPath([[0, 0], [0, 0], [100, 0]], 25)).toEqual([[0, 0], [25, 0], [50, 0], [75, 0], [100, 0]]);
   });
 });
