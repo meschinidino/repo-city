@@ -94,6 +94,13 @@ Test stack (approved): cargo test (Rust), Vitest (client logic), Playwright (the
 - Ribbon bridges (PR #20) and step 5 (PR #21) are independent branches off main; rebase the second after the first merges.
 - Still owed: cross-model review (Opus/Codex limited 2026-10-28, retry); live Claude pause/resume; adapter TestResult for agent-run tests.
 
+## Updates (2026-10-29, review rounds)
+
+- PR #21 at 15f0944. Four review rounds, all fixed with regression tests: Opus (3 P0 + 5 P1: session locks, check drain, hook abort, discard order), Codex (P1 auto-start lock + 2 P2: orphan reap, prune/branch errors), Opus re-review (6 P2: accept-stands-on-cleanup-failure, final reap, narrow prune, closed-quest silence), Codex closing (6 P2: full cleanup hint, LC_ALL=C prune, card warning, root guards, detached-only orphan test). Last two rounds found no P0/P1; reviews converged, no further round scheduled.
+- Gates on the final tree: cargo 42 lib + 13 finish_flow + suites, clippy clean, Vitest 94, tsc clean, Playwright 6/6. Live re-probe through the real binary 3/3 (Accept, Discard prune, double-Accept race); agent run scaffolded via sqlite worktree_path (spawn path untouched, proven live in QA). Script: /tmp/reprobe-step5.sh (lives outside /tmp/repro-step5, which it wipes).
+- Known limits: killpg id can theoretically recycle under extreme churn (documented in code); orphan pid test assumes PID 1 reaps (macOS launchd; no Linux CI); 5-min check timeout path code-reviewed, never executed live; muse runs use --approval-mode never (T8 must tighten).
+- Step 5 needs the owner now: taste-check the finish UI + merge PR #21 (after PR #20 merges, rebase). Then step 6 drag-connect.
+
 ## Open questions carried in the design doc
 
 - Exact Meta AI tooling requirement (gate 1 answers this).
