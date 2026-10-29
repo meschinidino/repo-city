@@ -34,12 +34,12 @@ pub struct AppState {
     /// whose id is below the last one it saw).
     emit_lock: Arc<Mutex<()>>,
     /// One async mutex per session id, held by every mutating
-    /// route for its whole duration. Accept's merge+checks window
-    /// can run minutes; without this a second Accept, a Discard,
-    /// or a follow-up could interleave it and strand or lose the
-    /// work. Entries are never removed (one small Arc per id);
-    /// routes take exactly one and never nest, so it cannot
-    /// deadlock.
+    /// route for its whole duration and by the completion-path
+    /// follow-up auto-start. Accept's merge+checks window can run
+    /// minutes; without this a second Accept, a Discard, or a
+    /// follow-up could interleave it and strand or lose the work.
+    /// Entries are never removed (one small Arc per id); holders
+    /// take exactly one and never nest, so it cannot deadlock.
     session_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     debounce: Duration,
 }
@@ -1274,6 +1274,13 @@ async fn run_pending_message_locked(state: Arc<AppState>, session_id: &str) {
     if session.worktree_path.is_none() {
         return;
     }
+    if session.state != "finished" {
+        // A route moved the quest while this waited on the lock
+        // (accepted, discarded, stopped): nothing to start, and
+        // no message belongs on a closed quest. The pending text
+        // stays put rather than vanishing silently.
+        return;
+    }
     if let Some(island_id) = session.island_id.as_deref() {
         if let Ok(Some(holder)) =
             state.store.island_lock_holder(&session.repo_path, island_id, Some(session_id))
@@ -1551,8 +1558,8 @@ async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
     };
     // The common case drains at once. Pipes still open past
     // the probe after a NORMAL exit mean orphaned grandchildren
-    // (only they inherit these pipes): reap the group. After a
-    // timeout the group is already reaped above.
+    // (only they inherit these pipes): reap the group to unblock
+    // the drain. After a timeout the group is already reaped.
     let first = tokio::time::timeout(Duration::from_secs(ORPHAN_PROBE_SECS), &mut reader).await;
     if first.is_err() && !timed_out {
         kill_process_group(pid);
@@ -1572,6 +1579,13 @@ async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
             }
         },
     };
+    if !timed_out {
+        // Final reap: grandchildren that never held the pipes
+        // (redirected output, daemonized servers) survive the
+        // drain above. Nothing a check spawns may outlive it; a
+        // fully exited group answers ESRCH.
+        kill_process_group(pid);
+    }
     let mut text = String::from_utf8_lossy(&out).into_owned();
     text.push_str(&String::from_utf8_lossy(&err));
     let tail: String = text.chars().skip(text.chars().count().saturating_sub(TEST_TAIL_CHARS)).collect();
@@ -1780,13 +1794,19 @@ async fn accept_session(
         )
         .into_response();
     }
-    if let Err(e) = crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("merged, but the worktree cleanup failed: {e}; retry Accept to finish"),
-        )
-        .into_response();
-    }
+    // Cleanup is janitorial: the work is merged and the checks
+    // passed, so a failure here must not strand the quest in a
+    // state no retry can leave (the dir may already be gone). The
+    // quest accepts; the warning names the leftover branch and
+    // the manual command that finishes the job.
+    let cleanup_warning = match crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
+        Ok(()) => None,
+        Err(e) => Some(format!(
+            "the worktree cleanup failed ({e}); the work is merged, but finish by hand: git -C {} worktree prune && git -C {} branch -D {branch}",
+            root.display(),
+            root.display(),
+        )),
+    };
     let session = match state.store.transition_state(&id, &["stopped", "finished", "failed", "kept"], "accepted") {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1799,7 +1819,11 @@ async fn accept_session(
         &id,
         Source::System,
         EventPayload::AgentMessage {
-            text: format!("Quest accepted: merged {branch} into {base} ({}). {checks}.", &merge_sha[..merge_sha.len().min(8)]),
+            text: format!(
+                "Quest accepted: merged {branch} into {base} ({}). {checks}.{}",
+                &merge_sha[..merge_sha.len().min(8)],
+                cleanup_warning.as_deref().map(|w| format!(" Warning: {w}")).unwrap_or_default()
+            ),
         },
     );
     (
@@ -1811,6 +1835,7 @@ async fn accept_session(
             "test_source": test_source,
             "test_passed": test_passed,
             "test_output": test_output,
+            "cleanup_warning": cleanup_warning,
         })),
     )
         .into_response()
@@ -1859,9 +1884,17 @@ async fn discard_session(
         let wt_path = PathBuf::from(wt);
         gone_already = !wt_path.exists();
         if let Err(e) = crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
+            // No API retry: a second Discard refuses an already
+            // discarded quest, and a held branch would fail again
+            // anyway. The message carries the manual command.
+            let branch = crate::worktree::branch_for(&session.id);
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("the quest is discarded, but the worktree removal failed: {e}"),
+                format!(
+                    "the quest is discarded, but the worktree removal failed: {e}; finish by hand: git -C {} worktree prune && git -C {} branch -D {branch}",
+                    root.display(),
+                    root.display(),
+                ),
             )
             .into_response();
         }
@@ -2065,12 +2098,14 @@ mod run_checks_tests {
     // pipes past the grace period (old code: a 60 s hang here).
     // Codex review P2: the group reap must actually kill the
     // orphan — Accept returns with nothing left behind.
+    // Opus re-review P2: that includes a grandchild with
+    // redirected output, which never holds the pipes.
     #[tokio::test]
     async fn checks_do_not_wait_out_orphaned_grandchildren() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("orphan.sh"),
-            "#!/bin/sh\nsleep 60 & echo $! > sleep.pid\nexit 1\n",
+            "#!/bin/sh\nsleep 60 & echo $! > sleep.pid\nsleep 61 >/dev/null 2>&1 & echo $! > sleep2.pid\nexit 1\n",
         )
         .unwrap();
         let start = std::time::Instant::now();
@@ -2081,21 +2116,26 @@ mod run_checks_tests {
             "took {:?}",
             start.elapsed()
         );
-        // The orphan is reaped (Unix: the reap is a no-op stub
+        // Both orphans are reaped (Unix: the reap is a no-op stub
         // elsewhere, so the pid check only runs where killpg
-        // exists).
+        // exists). kill(pid, 0) also answers 0 for a zombie, so
+        // this assumes PID 1 reaps promptly (launchd does; a Linux
+        // container without init would fail here — the repo has no
+        // Linux CI, and the gates run on macOS).
         #[cfg(unix)]
         {
-            let pid: i32 = std::fs::read_to_string(dir.path().join("sleep.pid"))
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+            for pid_file in ["sleep.pid", "sleep2.pid"] {
+                let pid: i32 = std::fs::read_to_string(dir.path().join(pid_file))
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "orphaned sleep {pid} still alive");
             }
-            assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "orphaned sleep {pid} still alive");
         }
     }
 }
@@ -2108,6 +2148,20 @@ mod pending_message_tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    fn test_state(store: Arc<Store>) -> Arc<AppState> {
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        Arc::new(AppState {
+            store,
+            tx,
+            watchers: Mutex::new(std::collections::HashMap::new()),
+            children: Mutex::new(std::collections::HashMap::new()),
+            spawning: Mutex::new(std::collections::HashSet::new()),
+            emit_lock: Arc::new(Mutex::new(())),
+            session_locks: Mutex::new(std::collections::HashMap::new()),
+            debounce: Duration::from_millis(50),
+        })
+    }
+
     // Codex review P1: the completion-path auto-start takes the
     // session lock, so no follow-up run can start inside an
     // Accept/Discard window. The waiter sits behind an island
@@ -2116,17 +2170,7 @@ mod pending_message_tests {
     #[tokio::test]
     async fn pending_followup_waits_for_the_session_lock() {
         let store = Arc::new(Store::in_memory().unwrap());
-        let (tx, _) = tokio::sync::broadcast::channel(16);
-        let state = Arc::new(AppState {
-            store: store.clone(),
-            tx,
-            watchers: Mutex::new(std::collections::HashMap::new()),
-            children: Mutex::new(std::collections::HashMap::new()),
-            spawning: Mutex::new(std::collections::HashSet::new()),
-            emit_lock: Arc::new(Mutex::new(())),
-            session_locks: Mutex::new(std::collections::HashMap::new()),
-            debounce: Duration::from_millis(50),
-        });
+        let state = test_state(store.clone());
         let holder = store
             .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None)
             .unwrap();
@@ -2154,6 +2198,35 @@ mod pending_message_tests {
         ));
         let back = store.get_session(&waiter.id).unwrap().unwrap();
         assert_eq!(back.state, "finished");
+        assert_eq!(back.pending_task.as_deref(), Some("go on"));
+    }
+
+    // Opus re-review: an auto-start that waited out an Accept or
+    // Discard finds a closed quest and stays silent — no
+    // "Queued message waits" on a quest that can never run. The
+    // pending text stays put rather than vanishing.
+    #[tokio::test]
+    async fn pending_followup_stays_silent_on_a_closed_quest() {
+        let store = Arc::new(Store::in_memory().unwrap());
+        let state = test_state(store.clone());
+        store
+            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None)
+            .unwrap();
+        let waiter = store
+            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None)
+            .unwrap();
+        store.set_state(&waiter.id, "finished").unwrap();
+        store.set_pending_task(&waiter.id, Some("go on")).unwrap();
+        store.set_worktree_path(&waiter.id, "/nowhere/wt").unwrap();
+        // Accept (or Discard) moved the quest while the auto-start
+        // waited on the session lock.
+        store.set_state(&waiter.id, "discarded").unwrap();
+
+        run_pending_message(state.clone(), &waiter.id).await;
+
+        assert!(store.events_for(&waiter.id, 0).unwrap().is_empty());
+        let back = store.get_session(&waiter.id).unwrap().unwrap();
+        assert_eq!(back.state, "discarded");
         assert_eq!(back.pending_task.as_deref(), Some("go on"));
     }
 }

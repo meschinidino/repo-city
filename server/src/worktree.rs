@@ -94,8 +94,10 @@ pub fn remove_worktree(repo: &Path, path: &Path, session_id: &str) -> Result<(),
 }
 
 /// Drop stale worktree registrations. prune exits 0 even when a
-/// delete fails (it only warns), so nonempty stderr — not the
-/// exit code — is the failure signal.
+/// delete fails (it only warns), so the failure signal is an
+/// `error:`/`fatal:` line on stderr — not the exit code, and not
+/// any stderr text (config warnings and trace output must not
+/// fail the cleanup).
 fn prune_worktrees(repo: &Path) -> Result<(), String> {
     let out = Command::new("git")
         .arg("-C")
@@ -103,12 +105,12 @@ fn prune_worktrees(repo: &Path) -> Result<(), String> {
         .args(["worktree", "prune"])
         .output()
         .map_err(|e| format!("could not run git: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        return Err(stderr);
     }
-    let warned = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    if !warned.is_empty() {
-        return Err(warned);
+    if stderr.lines().any(|l| l.starts_with("error:") || l.starts_with("fatal:")) {
+        return Err(stderr);
     }
     Ok(())
 }
@@ -405,11 +407,17 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let admin = repo.join(".git").join("worktrees");
-            std::fs::set_permissions(&admin, std::fs::Permissions::from_mode(0o555)).unwrap();
-            let err = remove_worktree(&repo, &wt, "ffff2222-gggg").unwrap_err();
-            assert!(err.contains("Permission denied") || err.contains("permission"), "{err}");
-            std::fs::set_permissions(&admin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // Root ignores permission bits, so the fault injection
+            // proves nothing there; the restore below runs before
+            // any assertion, so a failure never strands the mode.
+            if unsafe { libc::geteuid() } != 0 {
+                let admin = repo.join(".git").join("worktrees");
+                std::fs::set_permissions(&admin, std::fs::Permissions::from_mode(0o555)).unwrap();
+                let result = remove_worktree(&repo, &wt, "ffff2222-gggg");
+                std::fs::set_permissions(&admin, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let err = result.unwrap_err();
+                assert!(err.contains("Permission denied") || err.contains("permission"), "{err}");
+            }
         }
         remove_worktree(&repo, &wt, "ffff2222-gggg").unwrap();
         assert!(git(&repo, &["branch", "--list", "repo-city/*"]).unwrap().is_empty());

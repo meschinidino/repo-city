@@ -196,6 +196,41 @@ async fn concurrent_accepts_serialize_into_one_merge() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
+async fn accept_with_cleanup_failure_still_accepts_and_names_the_leftover() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = temp_repo(Some("true"));
+    let repo = tmp.path().join("repo");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let base = serve_with(store.clone()).await;
+    let s = seed_quest(&store, &repo, &tmp.path().join("wts"), Some("api"));
+
+    // Committed work: Accept writes nothing to the worktree, so
+    // the read-only dir only breaks the removal below.
+    let wt = PathBuf::from(s.worktree_path.clone().unwrap());
+    std::fs::write(wt.join("quest.txt"), "did the thing\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-qm", "agent work"]);
+    assert_eq!(act(&base, &s.id, "stop").await.0, reqwest::StatusCode::OK);
+
+    std::fs::set_permissions(&wt, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (status, v) = act(&base, &s.id, "accept").await;
+    std::fs::set_permissions(&wt, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // The merge landed and the quest accepted; the warning names
+    // the leftover branch and the manual command. No retry can
+    // strand here: a second Accept refuses an accepted quest.
+    assert_eq!(status, reqwest::StatusCode::OK, "{}", err_text(&v));
+    assert_eq!(v["session"]["state"], "accepted");
+    let warning = v["cleanup_warning"].as_str().unwrap_or("");
+    assert!(warning.contains(&format!("repo-city/{}", &s.id[..8])), "{warning}");
+    assert!(warning.contains("by hand"), "{warning}");
+    assert_eq!(std::fs::read_to_string(repo.join("quest.txt")).unwrap(), "did the thing\n");
+    assert!(git_out(&repo, &["branch", "--list", "repo-city/*"]).contains("repo-city"));
+    assert_eq!(act(&base, &s.id, "accept").await.0, reqwest::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn accept_refuses_running_watcher_only_dirty_and_wrong_branch() {
     let tmp = temp_repo(Some("true"));
     let repo = tmp.path().join("repo");
@@ -497,6 +532,7 @@ async fn discard_failure_still_discards_and_says_so() {
     let (status, v) = act(&base, &s.id, "discard").await;
     assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR);
     assert!(err_text(&v).contains("is discarded"), "{}", err_text(&v));
+    assert!(err_text(&v).contains("by hand"), "{}", err_text(&v));
     let (gstatus, g) = get_session(&base, &s.id).await;
     assert_eq!(gstatus, reqwest::StatusCode::OK);
     assert_eq!(g["state"], "discarded");
