@@ -7,7 +7,7 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 ### Added — drag-connect lanes + lane-born bridges (step 6, on `feat/step6-drag-connect`, not merged)
 - Drag from one island and drop on another: the drop validates (same island, existing connection, multi-hop cycle — each refused in words), then an editable confirm opens; create re-validates, needs an agent (never a watcher), and stores the drag source. Escape, Close, or dropping on water cancels.
 - Open drag quests draw as gold marching-dash lanes in span dialect while their import does not exist yet; satisfied or terminal quests drop out. An accepted drag quest whose real import exists earns a bridge: the pair draws a full deck + direction glow despite a weak count. An accepted quest without the import draws nothing.
-- Tests: Vitest 137 (7 new lane reconcile/born tests), tsc clean, Playwright 6/6. Live-verified on GestiKo: lane draw, lane drop on real import, born deck + glow.
+- Tests: Vitest 137 (7 new lane reconcile/born tests), tsc clean, Playwright 7/7 (new drag journey: same-island, duplicate, multi-hop cycle, and quest-on-target refusals, confirm prefill + edit, watch refusal at create, Escape cancel, API-seeded lane). Live-verified on GestiKo: lane draw, lane drop on real import, born deck + glow.
 
 ### Merged — procedural ribbon bridges (PR #20, owner taste pass)
 - Bent bridges are mitered ribbons now: one strip per leg bends at any angle, each leg in its direction plank tile, posts stamp along the rails with sagging rope rails. This supersedes the corner-piece sprite (PR #19).
