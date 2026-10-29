@@ -11,6 +11,8 @@ export interface SessionInfo {
   repo_path: string;
   worktree_path: string | null;
   island_id: string | null;
+  /** Drag-connect source island (step 6); null for ordinary quests. */
+  source_island_id: string | null;
   task: string | null;
   state: string;
   /** Merge target recorded at creation (T6); null for
@@ -141,7 +143,7 @@ export async function fetchExtraction(server: string, repo: string): Promise<Ext
 export async function createSession(
   server: string,
   repo: string,
-  opts: { task?: string; spawn?: boolean; islandId?: string; model?: string; effort?: string; agent?: string } = {},
+  opts: { task?: string; spawn?: boolean; islandId?: string; model?: string; effort?: string; agent?: string; sourceIslandId?: string } = {},
 ): Promise<SessionInfo> {
   const res = await fetched(`${server}/api/sessions`, {
     method: "POST",
@@ -156,6 +158,7 @@ export async function createSession(
       model: opts.model,
       effort: opts.effort,
       agent: opts.agent,
+      source_island_id: opts.sourceIslandId,
     }),
   });
   return (await jsonOrThrow(res)) as SessionInfo;

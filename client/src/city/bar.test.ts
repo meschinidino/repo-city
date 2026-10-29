@@ -6,7 +6,7 @@ import { AGENT_CHOICES, actionsFor, agentLabel, capState, feedLines, hoverCard, 
 import type { SessionInfo } from "./live";
 
 const s = (state: string, task = "t", worktree: string | null = "/wt"): SessionInfo =>
-  ({ id: Math.random().toString(36).slice(2), repo_path: "/r", worktree_path: worktree, island_id: null, task, state, base_branch: "main", last_event_ms: null, cli_session_id: null, model: null, effort: null, agent: "claude", pending_task: null, created_ms: 0, updated_ms: 0 });
+  ({ id: Math.random().toString(36).slice(2), repo_path: "/r", worktree_path: worktree, island_id: null, source_island_id: null, task, state, base_branch: "main", last_event_ms: null, cli_session_id: null, model: null, effort: null, agent: "claude", pending_task: null, created_ms: 0, updated_ms: 0 });
 
 describe("capState (server rule: 3 spawned working quests)", () => {
   it("caps at three working quests with worktrees and names them", () => {
