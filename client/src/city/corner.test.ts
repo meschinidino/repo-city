@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   CORNER_ANCHOR,
+  CORNER_REACH_PX,
   cityProjector,
   cornerDecision,
   cornerKind,
@@ -92,6 +93,34 @@ describe("bridge corner joints", () => {
       cornerPlacement([{ gx: 20, gy: 0 }, { gx: 10, gy: 0 }, { gx: 10, gy: -10 }], 23, project, 64, isLand),
     ).toBeNull();
   });
+
+  it("fractional elbow: land under the arm vetoes (E repro)", () => {
+    // Codex review repro: 17,349 opaque pixels land on cell (12,11).
+    // The old 0.3-step sampler never visited that cell, so it accepted.
+    const isLand = (gx: number, gy: number) => gx === 12 && gy === 11;
+    expect(
+      cornerPlacement(
+        [{ gx: 15.75, gy: 10.75 }, { gx: 10.75, gy: 10.75 }, { gx: 10.75, gy: 5.75 }],
+        23,
+        project,
+        64,
+        isLand,
+      ),
+    ).toBeNull();
+  });
+
+  it("fractional elbow: land under the arm vetoes (mirrored W)", () => {
+    // Mirror of the E repro: 17,349 opaque pixels land on (11,12).
+    const isLand = (gx: number, gy: number) => gx === 11 && gy === 12;
+    const p = cornerPlacement(
+      [{ gx: 5.75, gy: 10.75 }, { gx: 10.75, gy: 10.75 }, { gx: 10.75, gy: 15.75 }],
+      23,
+      project,
+      64,
+      isLand,
+    );
+    expect(p).toBeNull();
+  });
 });
 
 describe("cornerDecision", () => {
@@ -137,7 +166,9 @@ describe("cornerDecision", () => {
     const dv = cornerDecision(sharp, 23, project, 64, { art: true, isLand: veto });
     expect(dv.corner).toBeNull();
     expect(dv.legs).toEqual([[sharp[0], sharp[1]], [sharp[1], sharp[2]]]);
-    const outside = (gx: number, gy: number) => gx === 12 && gy === 0;
+    // The disk is direction-independent-conservative (2.09 cells here),
+    // so "outside" needs real distance; (12,0) now vetoes by design.
+    const outside = (gx: number, gy: number) => gx === 13 && gy === 0;
     const dk = cornerDecision(sharp, 23, project, 64, { art: true, isLand: outside });
     expect(dk.corner).toEqual({ gx: 10, gy: 0, mirror: false });
     expect(dk.legs).toHaveLength(2);
@@ -175,5 +206,20 @@ describe("bridge-corner.png asset", () => {
     const dist = Math.hypot(r / opaque - r2 / n2, g / opaque - g2 / n2, b / opaque - b2 / n2);
     console.log(`[corner] palette dist to bridge-a ${dist.toFixed(1)}`);
     expect(dist).toBeLessThan(12);
+  });
+
+  it("opaque art stays within the veto radius bound", () => {
+    const c = loadSheetPixels("bridge-corner.png");
+    const vx = CORNER_ANCHOR.x * c.width, vy = CORNER_ANCHOR.y * c.height;
+    let max = 0;
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        if (c.data[(y * c.width + x) * 4 + 3] <= 128) continue;
+        const d = Math.hypot(x - vx, y - vy);
+        if (d > max) max = d;
+      }
+    }
+    console.log(`[corner] max art reach ${max.toFixed(1)}px`);
+    expect(max).toBeLessThanOrEqual(CORNER_REACH_PX);
   });
 });

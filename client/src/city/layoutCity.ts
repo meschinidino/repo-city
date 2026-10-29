@@ -879,6 +879,10 @@ export const CORNER_TILE_H = 645; // built at straight-tile scale: height maps t
 export const CORNER_DECK_W = 266; // deck band width in art px (bridge-a rows 234-500)
 export const CORNER_ARM_LEN = 462; // vertex to arm tip along the arm axis, art px (2 tile units)
 export const CORNER_ANCHOR = { x: 0.0224, y: 0.4564 }; // vertex (outer miter point) as art fractions
+// Farthest opaque pixel from the vertex, art px (measured 526.8, rounded up).
+// The land-veto radius derives from this; corner.test.ts re-measures the PNG
+// and fails if the art ever reaches past it.
+export const CORNER_REACH_PX = 527;
 export const CORNER_OVERLAP_W = 0.2; // legs end this far (deck widths) inside the arms, hiding their cuts
 export const CORNER_MIN_LEG = 0.5; // legs shorter than shorten + this (cells) keep straight tiles (no corner)
 
@@ -947,15 +951,19 @@ export function cornerPlacement(
   const leg2 = Math.hypot(p2.gx - elbow.gx, p2.gy - elbow.gy);
   if (leg1 <= cells + CORNER_MIN_LEG || leg2 <= cells + CORNER_MIN_LEG) return null;
   if (isLand) {
-    // Joint disk: arm length plus half a deck width, in cells. Any
-    // land inside vetoes the corner (conservative: the arms are thin
-    // but land beside them still reads wrong under the sprite).
+    // Joint disk: any land under the sprite vetoes the corner. Every
+    // opaque pixel sits within CORNER_REACH_PX art px of the vertex,
+    // and one grid cell covers at least TW/(2*sqrt(2)) screen px in
+    // every direction, so this disk covers the whole sprite. Each
+    // intersecting cell is checked exactly (closest-point test):
+    // coarse sampling can skip cells the sprite truly covers.
     const s = cornerTargetH(count) / CORNER_TILE_H;
-    const r = ((CORNER_ARM_LEN + CORNER_DECK_W / 2) * s) / (TW * Math.hypot(0.5, 0.25));
-    for (let dx = -r; dx <= r; dx += 0.3) {
-      for (let dy = -r; dy <= r; dy += 0.3) {
-        if (dx * dx + dy * dy > r * r) continue;
-        if (isLand(Math.floor(elbow.gx + dx), Math.floor(elbow.gy + dy))) return null;
+    const r = (CORNER_REACH_PX * s) / ((TW * Math.SQRT1_2) / 2);
+    for (let cx = Math.floor(elbow.gx - r); cx <= Math.floor(elbow.gx + r); cx++) {
+      for (let cy = Math.floor(elbow.gy - r); cy <= Math.floor(elbow.gy + r); cy++) {
+        const nx = Math.max(cx, Math.min(elbow.gx, cx + 1));
+        const ny = Math.max(cy, Math.min(elbow.gy, cy + 1));
+        if (Math.hypot(nx - elbow.gx, ny - elbow.gy) <= r && isLand(cx, cy)) return null;
       }
     }
   }
