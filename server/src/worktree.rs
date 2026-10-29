@@ -73,6 +73,10 @@ pub fn create_worktree(repo: &Path, root: &Path, session_id: &str) -> Result<Pat
 /// Remove a session worktree and its branch (discard path, step 5).
 /// A missing dir still prunes the stale worktree entry and the
 /// session branch, so a half-gone worktree never lingers.
+/// Genuinely absent resources are fine; a present branch that
+/// refuses deletion (a live worktree elsewhere still holds it,
+/// or the metadata is unwritable) is a real failure and
+/// surfaces, so Discard can report it honestly.
 pub fn remove_worktree(repo: &Path, path: &Path, session_id: &str) -> Result<(), String> {
     if path.exists() {
         git(
@@ -80,9 +84,32 @@ pub fn remove_worktree(repo: &Path, path: &Path, session_id: &str) -> Result<(),
             &["worktree", "remove", "--force", path.to_str().ok_or("worktree path is not UTF-8")?],
         )?;
     } else {
-        let _ = git(repo, &["worktree", "prune"]);
+        prune_worktrees(repo)?;
     }
-    let _ = git(repo, &["branch", "-D", &branch_for(session_id)]);
+    let branch = branch_for(session_id);
+    if !git(repo, &["branch", "--list", &branch])?.is_empty() {
+        git(repo, &["branch", "-D", &branch])?;
+    }
+    Ok(())
+}
+
+/// Drop stale worktree registrations. prune exits 0 even when a
+/// delete fails (it only warns), so nonempty stderr — not the
+/// exit code — is the failure signal.
+fn prune_worktrees(repo: &Path) -> Result<(), String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "prune"])
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let warned = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !warned.is_empty() {
+        return Err(warned);
+    }
     Ok(())
 }
 
@@ -345,6 +372,49 @@ mod tests {
         let err = create_worktree(&dir, &dir.join("wts"), "12345678-abcd").unwrap_err();
         assert!(err.contains("not a git repository"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Codex review P2: absent resources are fine, but a
+    // present branch that refuses deletion (a live worktree
+    // elsewhere still holds it) is a real failure and surfaces.
+    #[test]
+    fn held_branch_refuses_deletion_honestly() {
+        let repo = temp_repo();
+        let wt = create_worktree(&repo, &repo.with_extension("wts"), "aaaabbbb-cccc").unwrap();
+        assert!(wt.is_dir());
+        // The registered dir is gone from the caller's view, but
+        // the branch is still checked out in the live worktree.
+        let err = remove_worktree(&repo, &repo.join("no-such-dir"), "aaaabbbb-cccc").unwrap_err();
+        assert!(!err.is_empty(), "empty error");
+        assert!(!git(&repo, &["branch", "--list", "repo-city/aaaabbbb"]).unwrap().is_empty());
+        remove_worktree(&repo, &wt, "aaaabbbb-cccc").unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(repo.with_extension("wts"));
+    }
+
+    // Codex review P2: removing what is already fully gone is a
+    // no-op success, and a prune that warns (git still exits 0)
+    // surfaces as a failure.
+    #[test]
+    fn missing_everything_is_fine_but_a_warning_prune_fails() {
+        let repo = temp_repo();
+        remove_worktree(&repo, &repo.join("no-such-dir"), "dddd1111-eeee").unwrap();
+
+        let wt = create_worktree(&repo, &repo.with_extension("wts"), "ffff2222-gggg").unwrap();
+        std::fs::remove_dir_all(&wt).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let admin = repo.join(".git").join("worktrees");
+            std::fs::set_permissions(&admin, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let err = remove_worktree(&repo, &wt, "ffff2222-gggg").unwrap_err();
+            assert!(err.contains("Permission denied") || err.contains("permission"), "{err}");
+            std::fs::set_permissions(&admin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        remove_worktree(&repo, &wt, "ffff2222-gggg").unwrap();
+        assert!(git(&repo, &["branch", "--list", "repo-city/*"]).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(repo.with_extension("wts"));
     }
 
     #[test]

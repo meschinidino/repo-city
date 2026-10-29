@@ -1255,7 +1255,16 @@ async fn resume_session(
 /// that landed after the finish wins. The island lock is
 /// re-checked: finishing released the island, and another quest
 /// may hold it now — the message then stays queued, in words.
+/// Queued-message auto-start for the CLI-reader completion
+/// paths: takes the session lock first, so a follow-up run can
+/// never start inside an Accept/Discard window. Callers that
+/// already hold the lock use `run_pending_message_locked`.
 async fn run_pending_message(state: Arc<AppState>, session_id: &str) {
+    let _session_guard = state.session_lock(session_id).lock_owned().await;
+    run_pending_message_locked(state, session_id).await;
+}
+
+async fn run_pending_message_locked(state: Arc<AppState>, session_id: &str) {
     let Ok(Some(session)) = state.store.get_session(session_id) else {
         return;
     };
@@ -1358,7 +1367,7 @@ async fn message_session(
             // accepted message is never stranded in the queue.
             // A second message replaces the queued one.
             if session.state == "working" {
-                run_pending_message(state.clone(), &id).await;
+                run_pending_message_locked(state.clone(), &id).await;
             }
             let updated = state.store.get_session(&id).ok().flatten().unwrap_or(session);
             session_json(&updated).into_response()
@@ -1456,6 +1465,12 @@ const TEST_TAIL_CHARS: usize = 2000;
 /// hanging on a pipe a straggler holds.
 const READER_GRACE_SECS: u64 = 10;
 
+/// Probe before the orphan reap: pipes held past this after a
+/// NORMAL exit can only be orphaned grandchildren (nothing else
+/// inherits these pipes), so the group kill below is targeted.
+/// The happy path drains at once and never pays this second.
+const ORPHAN_PROBE_SECS: u64 = 1;
+
 /// SIGKILL a whole process group (Unix). Best effort by design:
 /// a reaped group (ESRCH) is the common case.
 #[cfg(unix)]
@@ -1486,8 +1501,8 @@ async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // Own process group, Unix only (inherent tokio method):
-    // the timeout kill then reaches grandchildren (node, vitest)
-    // too, so no orphan can hold the pipes open after the kill.
+    // the kills below then reach grandchildren (node, vitest)
+    // too, so no orphan can hold the pipes (or the machine).
     #[cfg(unix)]
     {
         cmd.process_group(0);
@@ -1502,7 +1517,7 @@ async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
     let mut stderr = child.stderr.take();
     // Both pipes drain at once: a suite loud on stderr must not
     // wedge while stdout is being read.
-    let reader = tokio::spawn(async move {
+    let mut reader = tokio::spawn(async move {
         let drain_out = async {
             let mut v = Vec::new();
             if let Some(o) = stdout.as_mut() {
@@ -1534,12 +1549,28 @@ async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
             (true, None)
         }
     };
-    let (out, err) = match tokio::time::timeout(Duration::from_secs(READER_GRACE_SECS), reader).await {
+    // The common case drains at once. Pipes still open past
+    // the probe after a NORMAL exit mean orphaned grandchildren
+    // (only they inherit these pipes): reap the group. After a
+    // timeout the group is already reaped above.
+    let first = tokio::time::timeout(Duration::from_secs(ORPHAN_PROBE_SECS), &mut reader).await;
+    if first.is_err() && !timed_out {
+        kill_process_group(pid);
+    }
+    let (out, err) = match first {
         Ok(Ok((o, e))) => (o, e),
-        // A straggler outside the group still holds a pipe (it
-        // escaped the group, or this is not Unix): proceed with
-        // a note instead of hanging. The straggler exits alone.
-        _ => (Vec::new(), b"(output lost: a test subprocess outlived the run and held the pipes)\n".to_vec()),
+        Ok(Err(_)) => (Vec::new(), b"(check output lost: the reader task failed)\n".to_vec()),
+        Err(_) => match tokio::time::timeout(Duration::from_secs(READER_GRACE_SECS), &mut reader).await {
+            Ok(Ok((o, e))) => (o, e),
+            // A straggler outside the group still holds a pipe
+            // (it escaped the group, or this is not Unix): stop
+            // the reader and proceed with a note instead of
+            // hanging. The straggler exits alone.
+            _ => {
+                reader.abort();
+                (Vec::new(), b"(output lost: a test subprocess outlived the run and held the pipes)\n".to_vec())
+            }
+        },
     };
     let mut text = String::from_utf8_lossy(&out).into_owned();
     text.push_str(&String::from_utf8_lossy(&err));
@@ -2032,10 +2063,16 @@ mod run_checks_tests {
 
     // Opus review P1-5: an orphaned grandchild must not hold the
     // pipes past the grace period (old code: a 60 s hang here).
+    // Codex review P2: the group reap must actually kill the
+    // orphan — Accept returns with nothing left behind.
     #[tokio::test]
     async fn checks_do_not_wait_out_orphaned_grandchildren() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("orphan.sh"), "#!/bin/sh\nsleep 60 & exit 1\n").unwrap();
+        std::fs::write(
+            dir.path().join("orphan.sh"),
+            "#!/bin/sh\nsleep 60 & echo $! > sleep.pid\nexit 1\n",
+        )
+        .unwrap();
         let start = std::time::Instant::now();
         let (passed, _) = run_checks(dir.path(), "sh orphan.sh").await;
         assert!(!passed);
@@ -2044,5 +2081,79 @@ mod run_checks_tests {
             "took {:?}",
             start.elapsed()
         );
+        // The orphan is reaped (Unix: the reap is a no-op stub
+        // elsewhere, so the pid check only runs where killpg
+        // exists).
+        #[cfg(unix)]
+        {
+            let pid: i32 = std::fs::read_to_string(dir.path().join("sleep.pid"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "orphaned sleep {pid} still alive");
+        }
+    }
+}
+
+#[cfg(test)]
+mod pending_message_tests {
+    use super::{run_pending_message, AppState};
+    use crate::events::EventPayload;
+    use crate::store::Store;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    // Codex review P1: the completion-path auto-start takes the
+    // session lock, so no follow-up run can start inside an
+    // Accept/Discard window. The waiter sits behind an island
+    // lock (no CLI can spawn); the waits-event proves when the
+    // auto-start ran.
+    #[tokio::test]
+    async fn pending_followup_waits_for_the_session_lock() {
+        let store = Arc::new(Store::in_memory().unwrap());
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let state = Arc::new(AppState {
+            store: store.clone(),
+            tx,
+            watchers: Mutex::new(std::collections::HashMap::new()),
+            children: Mutex::new(std::collections::HashMap::new()),
+            spawning: Mutex::new(std::collections::HashSet::new()),
+            emit_lock: Arc::new(Mutex::new(())),
+            session_locks: Mutex::new(std::collections::HashMap::new()),
+            debounce: Duration::from_millis(50),
+        });
+        let holder = store
+            .create_session_chosen("/repo", None, Some("api"), Some("hold"), None, None, None, None)
+            .unwrap();
+        assert_eq!(holder.state, "working");
+        let waiter = store
+            .create_session_chosen("/repo", None, Some("api"), Some("wait"), None, None, None, None)
+            .unwrap();
+        store.set_state(&waiter.id, "finished").unwrap();
+        store.set_pending_task(&waiter.id, Some("go on")).unwrap();
+        store.set_worktree_path(&waiter.id, "/nowhere/wt").unwrap();
+
+        let guard = state.session_lock(&waiter.id).lock_owned().await;
+        let waiter_id = waiter.id.clone();
+        let task = tokio::spawn(async move { run_pending_message(state, &waiter_id).await });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(store.events_for(&waiter.id, 0).unwrap().is_empty());
+        drop(guard);
+        task.await.unwrap();
+
+        let events = store.events_for(&waiter.id, 0).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0].payload,
+            EventPayload::AgentMessage { text } if text.contains("Queued message waits")
+        ));
+        let back = store.get_session(&waiter.id).unwrap().unwrap();
+        assert_eq!(back.state, "finished");
+        assert_eq!(back.pending_task.as_deref(), Some("go on"));
     }
 }
