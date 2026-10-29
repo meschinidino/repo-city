@@ -10,6 +10,7 @@ import { coastTileIndexWith } from "../map/coast";
 import { pixelsToCanvas } from "../map/renderPixi";
 import { TWBASE } from "../map/tileFit";
 import { bridgeAxisLegs, bridgeSpan, cityBridgeDeck, cityProjector, deckEdges, deckRibbon, deckTargetH, hashSeed, PLOT, plotDepth, studsOnPath, waterSegments, type CityLayout, type RibbonStrip } from "./layoutCity";
+import { dashSegments } from "./lane";
 import type { SessionView } from "../events/reduce";
 
 /** Rail furniture: posts stamp along both deck edges every
@@ -64,6 +65,16 @@ export class CityView {
   private ringIsland: string | null = null;
   /** Set by the shell: a plain click (not a drag) on the canvas. */
   onCanvasClick: ((sx: number, sy: number) => void) | null = null;
+  /** Set by the shell: a lane drag from one island onto another. */
+  onLaneDrop: ((fromId: string, toId: string) => void) | null = null;
+  private laneGfx: Graphics | null = null;
+  /** Committed pending lanes: { source, target } island ids, dashes
+   * flowing source -> target (used -> using, the drag direction). */
+  private lanes: { source: string; target: string }[] = [];
+  /** The lane under confirmation in the quest form, if any. */
+  private confirmingLane: { source: string; target: string } | null = null;
+  /** A drag in progress: origin island plus cursor in screen px. */
+  private previewDrag: { from: string; sx: number; sy: number } | null = null;
   private zoomLevel: "map" | "island" = "map";
   private bridgePairs: {
     count: number;
@@ -274,7 +285,8 @@ export class CityView {
 
   /** Island whose land (its organic cells) holds the point, if
    * any. Water inside the bounding rect does not pick. */
-  islandAtScreen(sx: number, sy: number): string | null {
+  /** Screen px to fractional grid cells (inverse projection). */
+  screenToGrid(sx: number, sy: number): { gx: number; gy: number } {
     const wx = (sx - this.cam.x) / this.cam.scale;
     const wy = (sy - this.cam.y) / this.cam.scale;
     // Invert the projection: project(0,0) is the origin, and one
@@ -282,12 +294,136 @@ export class CityView {
     const [ox, oy] = this.proj.project(0, 0);
     const u = (wx - ox) / (this.proj.TW / 2);
     const v = (wy - oy) / (this.proj.TW / 4);
-    const gx = Math.floor((u + v) / 2);
-    const gy = Math.floor((v - u) / 2);
+    return { gx: (u + v) / 2, gy: (v - u) / 2 };
+  }
+
+  islandAtScreen(sx: number, sy: number): string | null {
+    const { gx, gy } = this.screenToGrid(sx, sy);
+    const cx = Math.floor(gx);
+    const cy = Math.floor(gy);
     for (const isl of this.layout.islands) {
-      if (isl.cells.has(gx + "," + gy)) return isl.id;
+      if (isl.cells.has(cx + "," + cy)) return isl.id;
     }
     return null;
+  }
+
+  /** Screen position of an island's centre (drag tests aim here). */
+  islandCenterScreen(id: string): [number, number] | null {
+    const isl = this.layout.islands.find((i) => i.id === id);
+    if (!isl) return null;
+    const [wx, wy] = this.proj.project(isl.center.gx, isl.center.gy);
+    return this.toScreen(wx, wy);
+  }
+
+  /** Pending drag-connect lanes (source = used island). */
+  setLanes(lanes: { source: string; target: string }[]): void {
+    this.lanes = lanes;
+  }
+
+  /** Lane state for drag tests (committed, confirming, preview). */
+  laneDebug(): { lanes: number; confirming: boolean; preview: boolean } {
+    return { lanes: this.lanes.length, confirming: this.confirmingLane !== null, preview: this.previewDrag !== null };
+  }
+
+  /** The lane under confirmation in the quest form, if any. */
+  setConfirmingLane(lane: { source: string; target: string } | null): void {
+    this.confirmingLane = lane;
+  }
+
+  /** Shore-to-shore centerline between two islands, in the same
+   * span dialect as bridges (axis legs, bent fallback, shore
+   * walk). Points run from the first island to the second, so
+   * dashes march source -> target. Null when they touch. */
+  private laneSpanPoints(fromId: string, toId: string): { gx: number; gy: number }[] | null {
+    const a = this.layout.islands.find((i) => i.id === fromId);
+    const b = this.layout.islands.find((i) => i.id === toId);
+    if (!a || !b || a === b) return null;
+    const rectA = { x: a.x, y: a.y, w: a.cols * PLOT, h: a.rows * PLOT };
+    const rectB = { x: b.x, y: b.y, w: b.cols * PLOT, h: b.rows * PLOT };
+    const axis = bridgeAxisLegs(rectA, rectB);
+    let points: { gx: number; gy: number }[];
+    if (axis) {
+      points = [axis[0], axis[1]];
+    } else {
+      const bent = bridgeSpan(rectA, rectB);
+      if (!bent) return null;
+      const legs = this.spanLegs(bent);
+      points = legs.length === 2 ? [legs[0][0], legs[0][1], legs[1][1]] : [bent[0], bent[1]];
+    }
+    const shoreEnd = (
+      p: { gx: number; gy: number },
+      other: { gx: number; gy: number },
+      cells: Set<string>,
+    ) => {
+      const dx = p.gx - other.gx;
+      const dy = p.gy - other.gy;
+      const l = Math.hypot(dx, dy) || 1;
+      const ux = dx / l;
+      const uy = dy / l;
+      for (let s = -2; s <= 3; s += 0.1) {
+        const gx = p.gx + ux * s;
+        const gy = p.gy + uy * s;
+        if (cells.has(Math.floor(gx) + "," + Math.floor(gy))) {
+          return { gx: gx - ux * 0.25, gy: gy - uy * 0.25 };
+        }
+      }
+      return p;
+    };
+    const shore = [...points];
+    shore[0] = shoreEnd(points[0], points[1], a.cells);
+    shore[shore.length - 1] = shoreEnd(points[points.length - 1], points[points.length - 2], b.cells);
+    return shore;
+  }
+
+  /** Lane gold (DESIGN.md), the only glow the product carries. */
+  private drawLanes(nowMs: number): void {
+    const g = this.laneGfx;
+    if (!g) return;
+    g.clear();
+    const paths: { gx: number; gy: number }[][] = [];
+    for (const lane of this.lanes) {
+      const pts = this.laneSpanPoints(lane.source, lane.target);
+      if (pts) paths.push(pts);
+    }
+    if (this.confirmingLane) {
+      const pts = this.laneSpanPoints(this.confirmingLane.source, this.confirmingLane.target);
+      if (pts) paths.push(pts);
+    }
+    if (this.previewDrag) {
+      const from = this.layout.islands.find((i) => i.id === this.previewDrag!.from);
+      if (from) {
+        const cur = this.screenToGrid(this.previewDrag.sx, this.previewDrag.sy);
+        paths.push([{ gx: from.center.gx, gy: from.center.gy }, { gx: cur.gx, gy: cur.gy }]);
+      }
+    }
+    if (paths.length === 0) return;
+    const isLand = (gx: number, gy: number) => this.landCells.has(Math.floor(gx) + "," + Math.floor(gy));
+    const runs = paths.flatMap((pts) => waterSegments(pts, isLand));
+    if (runs.length === 0) return;
+    // Wide soft underlay first: the lane glows on the water.
+    for (const [a, b] of runs) {
+      const [ax, ay] = this.proj.project(a.gx, a.gy);
+      const [bx, by] = this.proj.project(b.gx, b.gy);
+      g.moveTo(ax, ay);
+      g.lineTo(bx, by);
+    }
+    g.stroke({ color: 0xffe3a3, width: 22, alpha: 0.35 });
+    // Marching dashes over it: direction by animation, source to
+    // target, never chevrons. Reduced motion freezes the march.
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const dash = 0.55;
+    const gap = 0.4;
+    const phase = still ? 0 : ((nowMs / 1000) * 1.6) % (dash + gap);
+    for (const [a, b] of runs) {
+      const segs = dashSegments([{ x: a.gx, y: a.gy }, { x: b.gx, y: b.gy }], dash, gap, phase);
+      for (const [p, q] of segs) {
+        const [ax, ay] = this.proj.project(p.x, p.y);
+        const [bx, by] = this.proj.project(q.x, q.y);
+        g.moveTo(ax, ay);
+        g.lineTo(bx, by);
+      }
+    }
+    g.stroke({ color: 0xffe3a3, width: 7, alpha: 0.95 });
   }
 
   /** Screen position below an island's centre (report-card anchor). */
@@ -389,10 +525,24 @@ export class CityView {
     el.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
       userMoved = true;
-      drag = { x: e.clientX, y: e.clientY, cx: this.cam.x, cy: this.cam.y };
       el.setPointerCapture(e.pointerId);
+      // A press on an island starts a lane drag, not a pan. Water
+      // still pans; a tap still clicks (see pointerup).
+      const rect = el.getBoundingClientRect();
+      const hit = this.islandAtScreen(e.clientX - rect.left, e.clientY - rect.top);
+      if (hit) {
+        this.previewDrag = { from: hit, sx: e.clientX - rect.left, sy: e.clientY - rect.top };
+      } else {
+        drag = { x: e.clientX, y: e.clientY, cx: this.cam.x, cy: this.cam.y };
+      }
     });
     el.addEventListener("pointermove", (e) => {
+      if (this.previewDrag) {
+        const rect = el.getBoundingClientRect();
+        this.previewDrag.sx = e.clientX - rect.left;
+        this.previewDrag.sy = e.clientY - rect.top;
+        return;
+      }
       if (!drag) return;
       this.cam.x = drag.cx + (e.clientX - drag.x);
       this.cam.y = drag.cy + (e.clientY - drag.y);
@@ -400,13 +550,32 @@ export class CityView {
       this.applyCam();
     });
     el.addEventListener("pointerup", (e) => {
+      const rect = el.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const preview = this.previewDrag;
+      this.previewDrag = null;
+      if (preview) {
+        const to = this.islandAtScreen(sx, sy);
+        // A tap on one island is a click, not a lane.
+        if (to === preview.from && this.onCanvasClick) {
+          this.onCanvasClick(sx, sy);
+        } else if (to && to !== preview.from && this.onLaneDrop) {
+          this.onLaneDrop(preview.from, to);
+        }
+        // Release on water, or without movement: cancel, no click.
+        // (A lane press is deliberate: it never pans either.)
+        return;
+      }
       if (drag && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5 && this.onCanvasClick) {
-        const rect = el.getBoundingClientRect();
-        this.onCanvasClick(e.clientX - rect.left, e.clientY - rect.top);
+        this.onCanvasClick(sx, sy);
       }
       drag = null;
     });
-    el.addEventListener("pointercancel", () => (drag = null));
+    el.addEventListener("pointercancel", () => {
+      drag = null;
+      this.previewDrag = null;
+    });
     el.addEventListener("dblclick", () => {
       userMoved = false;
       this.fitCamera();
@@ -640,6 +809,10 @@ export class CityView {
     root.addChild(this.postLayer);
     root.addChild(this.bridgeGfx);
     this.drawBridges();
+    // Lane layer above the bridges: pending connections read over
+    // finished ones, on water only.
+    this.laneGfx = new Graphics();
+    root.addChild(this.laneGfx);
 
     // buildings, one sprite per file, placed by its plate footprint
     const drawnTestIslets = new Set<string>();
@@ -809,6 +982,7 @@ export class CityView {
     // sail toward the target every frame; motion follows events only
     this.app.ticker.add((time) => {
       this.drawPulses(time.lastTime);
+      this.drawLanes(time.lastTime);
       if (this.ringIsland) this.drawRing(time.lastTime);
       if (!this.shipTarget) return;
       const [tx, ty] = this.shipTarget;

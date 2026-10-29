@@ -9,6 +9,7 @@ import { acceptSession, connectEvents, createSession, fetchAcceptPreview, fetchE
 import { applyEvent, initialView, type SessionView } from "./events/reduce";
 import { HarborBar, stateText } from "./city/bar";
 import { cleanupWarningLine, escHtml, isFinishable, lastFinishNote, lastTestResult, stallText, testLine } from "./city/finish";
+import { dragTaskText, hasEdge, validateDrop } from "./city/lane";
 import type { SessionInfo as BarSession } from "./city/live";
 import type { StoredEvent } from "./events/types";
 import buildingsUrl from "../../assets/sprites/buildings.png";
@@ -110,18 +111,57 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
   // quest log, and the report card. The event flow below still
   // follows this primary session.
   let knownSessions: BarSession[] = [];
+  const islandName = (id: string) => layout.islands.find((i) => i.id === id)?.name ?? id;
+  // One-shot refusal note above the bar (drag-connect rejections).
+  // A showing toast resets its timer instead of stacking.
+  let toastTimer = 0;
+  const toast = (text: string) => {
+    const el = document.getElementById("toast")!;
+    el.textContent = text;
+    el.style.display = "block";
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => (el.style.display = "none"), 4000);
+  };
+  // Pending lanes: drag quests still open whose import does not
+  // exist yet. Terminal quests drop out; a lane becomes a bridge
+  // only once the extraction carries the real import.
+  const reconcileLanes = () => {
+    const terminal = new Set(["accepted", "discarded", "archived"]);
+    city.setLanes(
+      knownSessions
+        .filter(
+          (s) =>
+            s.source_island_id &&
+            s.island_id &&
+            !terminal.has(s.state) &&
+            !hasEdge(layout.bridges, s.island_id, s.source_island_id),
+        )
+        .map((s) => ({ source: s.source_island_id!, target: s.island_id! })),
+    );
+  };
   const bar = new HarborBar({
     server,
     repo,
     islands: layout.islands.map((i) => ({ id: i.id, name: i.name })),
     onShowReport: (s) => void showReport(s),
-    onTargetPicked: (id) => city.selectIsland(id),
+    onTargetPicked: (id) => {
+      city.selectIsland(id);
+      // Retargeting a drag confirmation redraws its lane; the
+      // create path re-validates, so an invalid pick refuses
+      // there with its reason instead of here.
+      if (bar.pendingDragSource) {
+        city.setConfirmingLane(id ? { source: bar.pendingDragSource, target: id } : null);
+      }
+    },
     onSessionsChanged: (ss) => {
       knownSessions = ss;
+      reconcileLanes();
       refresh();
     },
     onFollow: (s) => void follow(s),
+    onDragChange: (lane) => city.setConfirmingLane(lane),
   });
+  bar.dragEdges = layout.bridges;
   city.onCanvasClick = (sx, sy) => {
     const id = city.islandAtScreen(sx, sy);
     if (id) {
@@ -133,6 +173,21 @@ async function cityMain(status: HTMLElement, params: URLSearchParams) {
       bar.closeQuest();
     }
   };
+  // Drag-connect (step 6): a lane drop validates, then opens the
+  // quest form as the editable confirmation card. Nothing runs
+  // before the user confirms there.
+  city.onLaneDrop = (fromId, toId) => {
+    const check = validateDrop(fromId, toId, layout.bridges, knownSessions, islandName);
+    if (!check.ok) {
+      toast(check.reason);
+      return;
+    }
+    bar.beginDragConfirm(fromId, toId, dragTaskText(islandName(fromId), islandName(toId)));
+  };
+  // Escape cancels a drag confirmation like closing the log.
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && bar.pendingDragSource) bar.closeQuest();
+  });
   void bar.refresh();
   // The quest log sits directly above the bar. The bar height
   // changes when its rows wrap (narrow windows), so measure it

@@ -58,6 +58,17 @@
       }
       .hover-title { font: 800 14px "Bricolage Grotesque", sans-serif; }
       .hover-meta { font: 600 12px "Overpass", system-ui, sans-serif; color: var(--text-muted); margin-top: 3px; }
+      /* Toast: one refusal line above the bar (drag-connect). Same
+         surface language as the other floating cards. */
+      #toast {
+        position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); z-index: 30;
+        max-width: min(480px, 90vw); padding: 10px 16px; white-space: pre-wrap;
+        background: var(--surface); color: var(--text);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 12px 32px rgba(8,24,28,.45);
+        font: 600 14px "Overpass", system-ui, sans-serif; text-align: center;
+        pointer-events: none;
+      }
       .token { flex: none; }
       .token {
         display: inline-flex; align-items: center; gap: 8px;
@@ -264,6 +275,7 @@
       </div>
       <div id="status">Loading sprite sheets…</div>
       <div id="hovercard" role="tooltip" style="display:none"></div>
+      <div id="toast" role="status" style="display:none"></div>
     </footer>
     <script type="module" src="/src/main.ts"></script>
   </body>

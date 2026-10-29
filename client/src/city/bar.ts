@@ -15,6 +15,7 @@ import {
 } from "./live";
 import type { StoredEvent } from "../events/types";
 import { stallText } from "./finish";
+import { validateDrop, type LaneEdge } from "./lane";
 
 export const MAX_ACTIVE_QUESTS = 3;
 
@@ -112,6 +113,9 @@ export interface HarborDeps {
   /** The map should follow this quest (null: back to the
    * primary session). Called on token pick and on create. */
   onFollow?: (s: SessionInfo | null) => void;
+  /** A drag-connect confirmation opened, retargeted (lane), or
+   * ended (null): main draws or drops the confirming lane. */
+  onDragChange?: (lane: { source: string; target: string } | null) => void;
 }
 
 /** Feed lines for the quest detail: the agent's replies and,
@@ -267,6 +271,24 @@ export class HarborBar {
   closeQuest(): void {
     el<HTMLSelectElement>("island-select").value = "";
     this.toggleLog(false);
+    if (this.pendingDragSource) {
+      this.pendingDragSource = null;
+      this.deps.onDragChange?.(null);
+    }
+  }
+
+  /** Drag-connect source island under confirmation, if any. Main
+   * sets the extraction edges once per load for validation. */
+  pendingDragSource: string | null = null;
+  dragEdges: LaneEdge[] = [];
+
+  /** Open the quest form as the confirmation card for a lane
+   * drop: prefilled editable task, target picked, lane drawn. */
+  beginDragConfirm(sourceId: string, targetId: string, task: string): void {
+    this.pendingDragSource = sourceId;
+    el<HTMLInputElement>("quest-task").value = task;
+    this.setTargetIsland(targetId);
+    this.deps.onDragChange?.({ source: sourceId, target: targetId });
   }
 
   private allSessions: SessionInfo[] = [];
@@ -487,6 +509,24 @@ export class HarborBar {
       this.toggleLog(true);
       return;
     }
+    // A drag confirmation re-validates at dispatch: the target
+    // may have changed in the form, or a quest may have started
+    // on it since the drop. A lane without an agent does no work.
+    const dragSource = this.pendingDragSource;
+    if (dragSource) {
+      if (!spawn) {
+        this.showError("A drag-connect quest needs an agent to do the work: pick Muse or Claude, not watch.");
+        this.toggleLog(true);
+        return;
+      }
+      const nameOf = (id: string) => this.deps.islands.find((i) => i.id === id)?.name ?? id;
+      const check = validateDrop(dragSource, islandId ?? "", this.dragEdges, this.allSessions, nameOf);
+      if (!check.ok) {
+        this.showError(check.reason);
+        this.toggleLog(true);
+        return;
+      }
+    }
     const model = el<HTMLSelectElement>("model-select").value || undefined;
     const effort = el<HTMLSelectElement>("effort-select").value || undefined;
     try {
@@ -497,11 +537,16 @@ export class HarborBar {
         model: spawn ? model : undefined,
         effort: spawn ? effort : undefined,
         agent: spawn ? (agentKind === "muse" ? "muse" : "claude") : undefined,
+        sourceIslandId: dragSource ?? undefined,
       });
       this.selectedId = s.id;
       this.deps.onFollow?.(s);
       el<HTMLInputElement>("quest-task").value = "";
       this.showError("");
+      if (dragSource) {
+        this.pendingDragSource = null;
+        this.deps.onDragChange?.(null);
+      }
       await this.refresh();
     } catch (e) {
       this.showError(`The server refused that quest: ${(e as Error).message}`);
