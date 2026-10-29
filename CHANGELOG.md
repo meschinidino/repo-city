@@ -4,6 +4,14 @@ All notable changes to Repo City. Versions follow the `VERSION` file.
 
 ## [Unreleased]
 
+### Added — bridge corner piece (owner todo, on `feat/bridge-corner`, needs owner check)
+- Sharp bent joints (53° on screen) now turn on a mitered corner piece (`assets/sprites/bridge-corner.png`, E opening, mirrored for W) instead of two overlapping straight tiles; the legs shorten ~1 cell so their tiling cuts hide under its arms. Wide joints (127°) keep straight tiles — they read as a slight kink, not a fault.
+- The art is tile surgery, not generation: the V is composited from `bridge-a.png` (top arm) and `bridge-b.png` (bottom, grid-normalized) at exactly ±atan(0.5), mitered along the bisector, vertex and tips phased into post gaps. Palette dist to bridge-a is 5.3 (A/B differ by 5.7). Builder `/tmp/corner/surgery.mjs` (kept, re-runnable); method recorded here so it rebuilds without the script.
+- 8 generated runs failed first and are documented, not shipped: 4 built-in-tool runs (along-planks, asymmetry, style drift, echo), 2 Codex v1 runs (C1: long arms with mid posts that cannot trim without dangling rails; C2: along-planks, double ropes), 2 Codex v2 short-arm runs (D1/D2: arms curve — tips flatten to ~10° while legs run 26.5°, so legs would poke out from under the arms). Briefs `assets/briefs/bridge-corner.txt` (v1) and `bridge-corner-b.txt` (v2). Losing runs stay out of the repo (`/Users/dinomeschini/generated_images/`, `~/.codex/generated_images/`).
+- Renderer: `cornerKind`/`cornerPlacement`/`cornerTargetH` in `layoutCity.ts` (pure, tested); `renderCity.ts` shortens sharp legs and draws the corner sprite over the joint, same scale convention as the tiles. Missing art falls back to full straight legs (never a gap).
+- Tests: `client/src/city/corner.test.ts` (10: E/W/N/S openings, deck height, shorten math, placement, short-leg and wide fallbacks, asset dims/palette/key). Full gates green: cargo 28+suites, clippy, Vitest 93, tsc, Playwright 5.
+- Before/after close-ups for the owner check: `/tmp/corner/side1.png` (E joint), `/tmp/corner/final5b.png` (mirrored W joint, gap filled).
+
 ### Merged — PR #18 accepted by the owner (2026-10-28)
 - Step 4 (T12 Harbor bar and its owner rounds) passed owner judgement and merged. One Opus review pass over the last two rounds is still owed; both reviewers were at their usage limits.
 - Owner todo: a sprite for bridge corners, so bent bridges turn on a corner piece instead of two straight tiles.

@@ -868,6 +868,88 @@ export function bridgeChevron(
   };
 }
 
+/** Corner piece (bridge-corner.png): a mitered V composited from the
+ * straight tiles at exactly +-atan(0.5), so its arms continue the legs
+ * they join. E opening (arms to the east); the renderer mirrors it for
+ * W openings. Built by /tmp/corner/surgery.mjs (kept, re-runnable):
+ * see the PR for the 8 failed generations that led to surgery. */
+export const CORNER_TILE_H = 645; // built at straight-tile scale: height maps to targetH like the tiles
+export const CORNER_DECK_W = 266; // deck band width in art px (bridge-a rows 234-500)
+export const CORNER_ARM_LEN = 462; // vertex to arm tip along the arm axis, art px (2 tile units)
+export const CORNER_ANCHOR = { x: 0.0224, y: 0.4841 }; // vertex (outer miter point) as art fractions
+export const CORNER_OVERLAP_W = 0.2; // legs end this far (deck widths) inside the arms, hiding their cuts
+export const CORNER_MIN_LEG = 0.5; // legs shorter than shorten + this (cells) keep straight tiles (no corner)
+
+/** One deck height per import count, same in every direction. Single
+ * source for the renderer (legs and corners scale together). */
+export function cornerTargetH(count: number): number {
+  return Math.min(62, 44 + 3 * Math.log2(count + 1));
+}
+
+/** How far each leg shortens toward its shore so the corner arms cover
+ * the joint: arm length minus the overlap, in grid cells. */
+export function cornerShortenCells(count: number, TW = 64): number {
+  const scale = cornerTargetH(count) / CORNER_TILE_H;
+  const worldPx = (CORNER_ARM_LEN - CORNER_OVERLAP_W * CORNER_DECK_W) * scale;
+  return worldPx / (TW * Math.hypot(0.5, 0.25));
+}
+
+export interface GridPt { gx: number; gy: number }
+
+export interface CornerKind { sharp: boolean; mirror: boolean; angleDeg: number }
+
+/** Which way a bent 3-point path turns on screen. Sharp = interior
+ * angle under 100 degrees (bent grid turns project to 53 or 127, a
+ * clean split). Mirror = the V opens west (arms extend -x), so the
+ * renderer flips the E-opening art. Pure: tested, renderer-agnostic. */
+export function cornerKind(
+  a: GridPt,
+  elbow: GridPt,
+  b: GridPt,
+  project: (gx: number, gy: number) => [number, number],
+): CornerKind {
+  const [ex, ey] = project(elbow.gx, elbow.gy);
+  const v1 = [project(a.gx, a.gy)[0] - ex, project(a.gx, a.gy)[1] - ey];
+  const v2 = [project(b.gx, b.gy)[0] - ex, project(b.gx, b.gy)[1] - ey];
+  const l1 = Math.hypot(v1[0], v1[1]);
+  const l2 = Math.hypot(v2[0], v2[1]);
+  const cos = (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2);
+  const angleDeg = (Math.acos(Math.min(1, Math.max(-1, cos))) * 180) / Math.PI;
+  return { sharp: angleDeg < 100, mirror: v1[0] + v2[0] < 0, angleDeg };
+}
+
+export interface CornerPlacement {
+  gx: number; gy: number; // elbow grid point (corner vertex sits here)
+  mirror: boolean; // V opens west: flip the art
+  ends: [GridPt, GridPt, GridPt, GridPt]; // shortened legs: [p0, E1', E2', p2]
+}
+
+/** Corner placement for a bent 3-point deck path, or null when the
+ * joint keeps straight tiles (wide turn, or a leg too short to hold
+ * the arms). The legs end inside the arms so the corner art covers
+ * their ragged tiling cuts. */
+export function cornerPlacement(
+  points: [GridPt, GridPt, GridPt],
+  count: number,
+  project: (gx: number, gy: number) => [number, number],
+  TW = 64,
+): CornerPlacement | null {
+  const [p0, elbow, p2] = points;
+  const kind = cornerKind(p0, elbow, p2, project);
+  if (!kind.sharp) return null;
+  const cells = cornerShortenCells(count, TW);
+  const leg1 = Math.hypot(p0.gx - elbow.gx, p0.gy - elbow.gy);
+  const leg2 = Math.hypot(p2.gx - elbow.gx, p2.gy - elbow.gy);
+  if (leg1 <= cells + CORNER_MIN_LEG || leg2 <= cells + CORNER_MIN_LEG) return null;
+  const toward = (from: GridPt, to: GridPt): GridPt => {
+    const dx = to.gx - from.gx;
+    const dy = to.gy - from.gy;
+    const len = Math.hypot(dx, dy);
+    return { gx: from.gx + (dx / len) * cells, gy: from.gy + (dy / len) * cells };
+  };
+  return { gx: elbow.gx, gy: elbow.gy, mirror: kind.mirror, ends: [p0, toward(elbow, p0), toward(elbow, p2), p2] };
+}
+
 /** Isometric projection for a city of any size (same math as the test map). */
 export function cityProjector(layout: { cols: number; rows: number }, TW: number) {
   const TH = TW / 2;
