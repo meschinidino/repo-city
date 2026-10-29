@@ -98,6 +98,17 @@ async fn act(base: &str, id: &str, action: &str) -> (reqwest::StatusCode, serde_
     (status, resp.json().await.unwrap_or(serde_json::Value::Null))
 }
 
+async fn get_session(base: &str, id: &str) -> (reqwest::StatusCode, serde_json::Value) {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{base}/api/sessions/{id}"))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, resp.json().await.unwrap_or(serde_json::Value::Null))
+}
+
 async fn get_preview(base: &str, id: &str) -> (reqwest::StatusCode, serde_json::Value) {
     let client = reqwest::Client::new();
     let resp = client
@@ -156,6 +167,32 @@ async fn accept_merges_uncommitted_work_runs_checks_and_cleans_up() {
     let (status, v) = act(&base, &s.id, "archive").await;
     assert_eq!(status, reqwest::StatusCode::OK);
     assert_eq!(v["state"], "archived");
+}
+
+#[tokio::test]
+async fn concurrent_accepts_serialize_into_one_merge() {
+    // Slow checks hold the merge window open: both accepts land
+    // while the first still runs. The session lock must let
+    // exactly one through; the loser sees the accepted quest.
+    let tmp = temp_repo(Some("sleep 2"));
+    let repo = tmp.path().join("repo");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let base = serve_with(store.clone()).await;
+    let s = seed_quest(&store, &repo, &tmp.path().join("wts"), Some("api"));
+
+    let wt = PathBuf::from(s.worktree_path.clone().unwrap());
+    std::fs::write(wt.join("quest.txt"), "did the thing\n").unwrap();
+    assert_eq!(act(&base, &s.id, "stop").await.0, reqwest::StatusCode::OK);
+
+    let (a, b) = tokio::join!(act(&base, &s.id, "accept"), act(&base, &s.id, "accept"));
+    let mut codes = [a.0, b.0];
+    codes.sort();
+    assert_eq!(codes, [reqwest::StatusCode::OK, reqwest::StatusCode::CONFLICT]);
+
+    let log = git_out(&repo, &["log", "--oneline"]);
+    assert_eq!(log.matches("Repo City: accept quest").count(), 1, "{log}");
+    let (_, g) = get_session(&base, &s.id).await;
+    assert_eq!(g["state"], "accepted");
 }
 
 #[tokio::test]
@@ -420,4 +457,47 @@ async fn discard_removes_worktree_and_branch_from_any_live_state() {
     assert_eq!(status, reqwest::StatusCode::OK);
     assert_eq!(v["state"], "discarded");
     assert!(!wt2.exists());
+}
+
+#[tokio::test]
+async fn discard_prunes_branch_when_dir_is_already_gone() {
+    let tmp = temp_repo(Some("true"));
+    let repo = tmp.path().join("repo");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let base = serve_with(store.clone()).await;
+
+    let s = seed_quest(&store, &repo, &tmp.path().join("wts"), Some("api"));
+    let wt = PathBuf::from(s.worktree_path.clone().unwrap());
+    // The dir vanishes outside the API (user rm, crash): the
+    // stale worktree entry and the session branch remain.
+    std::fs::remove_dir_all(&wt).unwrap();
+    assert!(git_out(&repo, &["branch", "--list", "repo-city/*"]).contains("repo-city"));
+
+    let (status, v) = act(&base, &s.id, "discard").await;
+    assert_eq!(status, reqwest::StatusCode::OK);
+    assert_eq!(v["state"], "discarded");
+    assert!(!git_out(&repo, &["branch", "--list", "repo-city/*"]).contains("repo-city"));
+    assert!(!git_out(&repo, &["worktree", "list"]).contains(&s.id));
+}
+
+#[tokio::test]
+async fn discard_failure_still_discards_and_says_so() {
+    let tmp = temp_repo(Some("true"));
+    let repo = tmp.path().join("repo");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let base = serve_with(store.clone()).await;
+
+    let s = seed_quest(&store, &repo, &tmp.path().join("wts"), Some("api"));
+    // Point the worktree path at a plain file: removal fails,
+    // but the state move already committed the discard.
+    let blocker = tmp.path().join("blocker");
+    std::fs::write(&blocker, "not a worktree\n").unwrap();
+    store.set_worktree_path(&s.id, blocker.to_str().unwrap()).unwrap();
+
+    let (status, v) = act(&base, &s.id, "discard").await;
+    assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(err_text(&v).contains("is discarded"), "{}", err_text(&v));
+    let (gstatus, g) = get_session(&base, &s.id).await;
+    assert_eq!(gstatus, reqwest::StatusCode::OK);
+    assert_eq!(g["state"], "discarded");
 }

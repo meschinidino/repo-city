@@ -71,11 +71,17 @@ pub fn create_worktree(repo: &Path, root: &Path, session_id: &str) -> Result<Pat
 }
 
 /// Remove a session worktree and its branch (discard path, step 5).
+/// A missing dir still prunes the stale worktree entry and the
+/// session branch, so a half-gone worktree never lingers.
 pub fn remove_worktree(repo: &Path, path: &Path, session_id: &str) -> Result<(), String> {
-    git(
-        repo,
-        &["worktree", "remove", "--force", path.to_str().ok_or("worktree path is not UTF-8")?],
-    )?;
+    if path.exists() {
+        git(
+            repo,
+            &["worktree", "remove", "--force", path.to_str().ok_or("worktree path is not UTF-8")?],
+        )?;
+    } else {
+        let _ = git(repo, &["worktree", "prune"]);
+    }
     let _ = git(repo, &["branch", "-D", &branch_for(session_id)]);
     Ok(())
 }
@@ -176,7 +182,14 @@ pub fn merge_branch(repo: &Path, branch: &str) -> Result<MergeOutcome, String> {
         let sha = git(repo, &["rev-parse", "HEAD"])?;
         return Ok(MergeOutcome::Merged { sha });
     }
-    git(repo, &["commit", "--no-edit", "-q"])?;
+    // A failing hook (or a missing identity) must not leave a
+    // half-merge behind: abort, so the checkout is clean and a
+    // retry starts fresh. The hooks still run — a rejection
+    // surfaces as an error, never as a stuck MERGE_HEAD.
+    if let Err(e) = git(repo, &["commit", "--no-edit", "-q"]) {
+        let _ = git(repo, &["merge", "--abort"]);
+        return Err(e);
+    }
     let sha = git(repo, &["rev-parse", "HEAD"])?;
     Ok(MergeOutcome::Merged { sha })
 }
@@ -389,6 +402,54 @@ mod tests {
         assert!(!merge_in_progress(&repo));
         remove_worktree(&repo, &wt, "abcdef01-zzzz").unwrap();
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // Opus review P1-6: a hook rejecting the merge commit must
+    // abort the merge, not strand MERGE_HEAD in the checkout.
+    #[test]
+    fn rejecting_hook_aborts_the_merge_clean() {
+        let repo = temp_repo();
+        let hook = repo.join(".git").join("hooks").join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho no\n exit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // The worktree root sits outside the repo, like the
+        // production root (~/.repo-city/worktrees): a nested
+        // worktree would read as untracked dirt in main.
+        let wtroot = repo.with_extension("wts");
+        let wt = create_worktree(&repo, &wtroot, "beef0101-zzzz").unwrap();
+        // The worktree shares main's hooks, so its setup commit
+        // points at an empty hook dir; the merge commit in main
+        // hits the rejecting hook.
+        let nohooks = repo.with_extension("nohooks");
+        std::fs::create_dir(&nohooks).unwrap();
+        std::fs::write(wt.join("b.txt"), "from branch\n").unwrap();
+        assert!(Command::new("git").arg("-C").arg(&wt).args(["add", "-A"]).output().unwrap().status.success());
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&wt)
+            .args(["-c", "user.email=t@example.com", "-c", "user.name=T", "-c"])
+            .arg(format!("core.hooksPath={}", nohooks.display()))
+            .args(["commit", "-qam", "branch work"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let err = merge_branch(&repo, "repo-city/beef0101").unwrap_err();
+        assert!(!err.is_empty(), "empty error");
+        assert!(dirty_files(&repo).unwrap().is_empty());
+        assert!(!merge_in_progress(&repo));
+        // And the retry works once the hook is gone.
+        std::fs::remove_file(&hook).unwrap();
+        assert!(matches!(
+            merge_branch(&repo, "repo-city/beef0101").unwrap(),
+            MergeOutcome::Merged { .. }
+        ));
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(repo.with_extension("nohooks"));
+        let _ = std::fs::remove_dir_all(repo.with_extension("wts"));
     }
 
     #[test]

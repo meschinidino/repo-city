@@ -33,6 +33,14 @@ pub struct AppState {
     /// events out of global-id order (a live client drops any event
     /// whose id is below the last one it saw).
     emit_lock: Arc<Mutex<()>>,
+    /// One async mutex per session id, held by every mutating
+    /// route for its whole duration. Accept's merge+checks window
+    /// can run minutes; without this a second Accept, a Discard,
+    /// or a follow-up could interleave it and strand or lose the
+    /// work. Entries are never removed (one small Arc per id);
+    /// routes take exactly one and never nest, so it cannot
+    /// deadlock.
+    session_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     debounce: Duration,
 }
 
@@ -63,6 +71,17 @@ impl AppState {
         let event = self.store.append(session_id, source, payload)?;
         let _ = self.tx.send(event.clone());
         Ok(event)
+    }
+
+    /// The mutex serializing mutations of one session. Held
+    /// across the whole route body (see `session_locks`).
+    fn session_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.session_locks
+            .lock()
+            .unwrap()
+            .entry(session_id.to_string())
+            .or_default()
+            .clone()
     }
 
     /// Stop the watcher and kill the agent child of one session.
@@ -223,6 +242,7 @@ pub fn build_app_with(store: Arc<Store>, debounce: Duration) -> Router {
         children: Mutex::new(HashMap::new()),
         spawning: Mutex::new(std::collections::HashSet::new()),
         emit_lock: Arc::new(Mutex::new(())),
+        session_locks: Mutex::new(HashMap::new()),
         debounce,
     });
     Router::new()
@@ -1107,6 +1127,7 @@ async fn stop_session(
         )
         .into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     // State first: the CLI reader checks it before logging anything
     // more, so nothing can land after the stopped event. A session
     // that already ended cannot stop again.
@@ -1161,6 +1182,7 @@ async fn pause_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state.store.transition_state(&id, &["working"], "paused") {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1182,6 +1204,7 @@ async fn resume_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     if let Ok(Some(session)) = state.store.get_session(&id) {
         if let Some(island_id) = session.island_id.as_deref() {
             if let Ok(Some(holder)) =
@@ -1316,6 +1339,7 @@ async fn message_session(
     if body.task.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "message is empty".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state.store.get_session(&id) {
         Ok(Some(s)) => s,
         Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
@@ -1357,6 +1381,7 @@ async fn archive_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state
         .store
         .transition_state(&id, &["finished", "failed", "stopped", "accepted", "discarded", "kept"], "archived")
@@ -1389,6 +1414,7 @@ async fn follow_up_session(
     if body.task.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "task is empty".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let before = match state.store.get_session(&id) {
         Ok(Some(s)) => s,
         Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
@@ -1425,9 +1451,27 @@ const TEST_TIMEOUT_SECS: u64 = 300;
 /// Last characters of the check output kept for the card.
 const TEST_TAIL_CHARS: usize = 2000;
 
+/// Grace past the kill during which the output reader may
+/// finish; then Accept proceeds without the tail rather than
+/// hanging on a pipe a straggler holds.
+const READER_GRACE_SECS: u64 = 10;
+
+/// SIGKILL a whole process group (Unix). Best effort by design:
+/// a reaped group (ESRCH) is the common case.
+#[cfg(unix)]
+fn kill_process_group(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        unsafe {
+            libc::killpg(pid as i32, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: Option<u32>) {}
+
 /// Run the discovered test command in `dir`: no shell, output
-/// piped so a verbose suite cannot wedge the pipe, killed on
-/// timeout. Returns (passed, output tail).
+/// piped, killed on timeout. Returns (passed, output tail).
 async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
     use std::process::Stdio;
     use tokio::io::AsyncReadExt;
@@ -1436,28 +1480,44 @@ async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
         return (false, "empty test command".to_string());
     };
     let args: Vec<&str> = parts.collect();
-    let mut child = match tokio::process::Command::new(program)
-        .args(&args)
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(&args)
         .current_dir(dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    // Own process group, Unix only (inherent tokio method):
+    // the timeout kill then reaches grandchildren (node, vitest)
+    // too, so no orphan can hold the pipes open after the kill.
+    #[cfg(unix)]
     {
+        cmd.process_group(0);
+    }
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => return (false, format!("could not run {command}: {e}")),
     };
+    // Read now: the handle may stop reporting it after exit.
+    let pid = child.id();
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
+    // Both pipes drain at once: a suite loud on stderr must not
+    // wedge while stdout is being read.
     let reader = tokio::spawn(async move {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        if let Some(o) = stdout.as_mut() {
-            let _ = o.read_to_end(&mut out).await;
-        }
-        if let Some(e) = stderr.as_mut() {
-            let _ = e.read_to_end(&mut err).await;
-        }
-        (out, err)
+        let drain_out = async {
+            let mut v = Vec::new();
+            if let Some(o) = stdout.as_mut() {
+                let _ = o.read_to_end(&mut v).await;
+            }
+            v
+        };
+        let drain_err = async {
+            let mut v = Vec::new();
+            if let Some(e) = stderr.as_mut() {
+                let _ = e.read_to_end(&mut v).await;
+            }
+            v
+        };
+        tokio::join!(drain_out, drain_err)
     });
     // One waiter at a time: on timeout the wait future drops
     // and the handle stays usable for the kill below.
@@ -1468,11 +1528,19 @@ async fn run_checks(dir: &std::path::Path, command: &str) -> (bool, String) {
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
+            // The direct child is dead; reap the group so no
+            // grandchild holds the pipes (or the machine).
+            kill_process_group(pid);
             (true, None)
         }
     };
-    // The kill closes the pipes, so the reader always finishes.
-    let (out, err) = reader.await.unwrap_or_default();
+    let (out, err) = match tokio::time::timeout(Duration::from_secs(READER_GRACE_SECS), reader).await {
+        Ok(Ok((o, e))) => (o, e),
+        // A straggler outside the group still holds a pipe (it
+        // escaped the group, or this is not Unix): proceed with
+        // a note instead of hanging. The straggler exits alone.
+        _ => (Vec::new(), b"(output lost: a test subprocess outlived the run and held the pipes)\n".to_vec()),
+    };
     let mut text = String::from_utf8_lossy(&out).into_owned();
     text.push_str(&String::from_utf8_lossy(&err));
     let tail: String = text.chars().skip(text.chars().count().saturating_sub(TEST_TAIL_CHARS)).collect();
@@ -1546,6 +1614,7 @@ async fn accept_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state.store.get_session(&id) {
         Ok(Some(s)) => s,
         Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
@@ -1728,6 +1797,7 @@ async fn discard_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state.store.get_session(&id) {
         Ok(Some(s)) => s,
         Ok(None) => return err(StatusCode::NOT_FOUND, "session not found".to_string()).into_response(),
@@ -1736,20 +1806,11 @@ async fn discard_session(
     if ["accepted", "discarded"].contains(&session.state.as_str()) {
         return err(StatusCode::CONFLICT, format!("the quest is already {}", session.state)).into_response();
     }
-    if ["working", "paused"].contains(&session.state.as_str()) {
-        state.teardown_runtime(&id).await;
-    }
-    let root = PathBuf::from(&session.repo_path);
-    let mut gone_already = true;
-    if let Some(wt) = session.worktree_path.as_deref() {
-        let wt_path = PathBuf::from(wt);
-        if wt_path.exists() {
-            gone_already = false;
-            if let Err(e) = crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
-                return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not remove the worktree: {e}")).into_response();
-            }
-        }
-    }
+    // The state move is the commit point: teardown_runtime
+    // requires it first, and a cleanup failure below must never
+    // resurrect the quest. The lock rules out races between the
+    // read above and this move.
+    let live = ["working", "paused"].contains(&session.state.as_str());
     let session = match state.store.transition_state(
         &id,
         &["working", "paused", "stopped", "finished", "failed", "kept", "archived"],
@@ -1758,6 +1819,22 @@ async fn discard_session(
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
     };
+    if live {
+        state.teardown_runtime(&id).await;
+    }
+    let root = PathBuf::from(&session.repo_path);
+    let mut gone_already = true;
+    if let Some(wt) = session.worktree_path.as_deref() {
+        let wt_path = PathBuf::from(wt);
+        gone_already = !wt_path.exists();
+        if let Err(e) = crate::worktree::remove_worktree(&root, &wt_path, &session.id) {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("the quest is discarded, but the worktree removal failed: {e}"),
+            )
+            .into_response();
+        }
+    }
     let _ = state.emit(
         &id,
         Source::System,
@@ -1783,6 +1860,7 @@ async fn keep_session(
     if !mutation_allowed(&headers) {
         return err(StatusCode::FORBIDDEN, "browser mutations need a dev origin and the x-repo-city header".to_string()).into_response();
     }
+    let _session_guard = state.session_lock(&id).lock_owned().await;
     let session = match state.store.transition_state(&id, &["stopped", "finished", "failed"], "kept") {
         Ok(s) => s,
         Err(e) => return transition_err(e).into_response(),
@@ -1932,5 +2010,39 @@ mod agent_choice_tests {
         assert!(v("claude", "claude-X", "low").is_err());
         let too_long = format!("claude-{}", "a".repeat(60));
         assert!(v("claude", &too_long, "low").is_err());
+    }
+}
+
+#[cfg(test)]
+mod run_checks_tests {
+    use super::{run_checks, TEST_TAIL_CHARS};
+    use std::time::Duration;
+
+    // Opus review P1-4: 200KB on stderr must not wedge the drain.
+    // (Script files: run_checks splits the command on whitespace,
+    // so no quoting survives.)
+    #[tokio::test]
+    async fn checks_drain_a_loud_stderr_without_wedging() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("loud.py"), "import sys\nsys.stderr.write('x'*200000)\n").unwrap();
+        let (passed, tail) = run_checks(dir.path(), "python3 loud.py").await;
+        assert!(passed);
+        assert_eq!(tail.chars().count(), TEST_TAIL_CHARS);
+    }
+
+    // Opus review P1-5: an orphaned grandchild must not hold the
+    // pipes past the grace period (old code: a 60 s hang here).
+    #[tokio::test]
+    async fn checks_do_not_wait_out_orphaned_grandchildren() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("orphan.sh"), "#!/bin/sh\nsleep 60 & exit 1\n").unwrap();
+        let start = std::time::Instant::now();
+        let (passed, _) = run_checks(dir.path(), "sh orphan.sh").await;
+        assert!(!passed);
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "took {:?}",
+            start.elapsed()
+        );
     }
 }
